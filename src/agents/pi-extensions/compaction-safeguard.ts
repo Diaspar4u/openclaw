@@ -22,6 +22,58 @@ import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js
 const log = createSubsystemLogger("compaction-safeguard");
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+
+const TRANSCRIPT_FALLBACK_MAX_ENTRIES = 20;
+const TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY = 500;
+
+/**
+ * Extract recent message text for fallback context when summarization fails.
+ * Provides raw transcript chunks so agent has SOME context rather than none.
+ *
+ * Handles two `AgentMessage.content` shapes:
+ *   - `string` (plain text messages)
+ *   - `Array<{ type: "text", text: string }>` (block-structured messages)
+ *
+ * Non-text blocks (images, tool-use, etc.) are intentionally skipped — only
+ * human-readable text matters for the fallback summary.
+ */
+function extractRecentTranscriptContext(messages: AgentMessage[]): string {
+  const recentMessages = messages.slice(-TRANSCRIPT_FALLBACK_MAX_ENTRIES);
+  const lines: string[] = [];
+
+  for (const msg of recentMessages) {
+    const role = (msg as { role?: string }).role ?? "unknown";
+    let text = "";
+
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          "text" in block &&
+          typeof block.text === "string"
+        ) {
+          text += block.text + " ";
+        }
+      }
+      text = text.trim();
+    }
+
+    if (text) {
+      const truncated =
+        text.length > TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY
+          ? text.substring(0, TRANSCRIPT_FALLBACK_MAX_CHARS_PER_ENTRY) + "..."
+          : text;
+      lines.push(`[${role}]: ${truncated}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -199,11 +251,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
+    const buildTranscriptFallback = (reason: string): string => {
+      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+      const transcriptContext = extractRecentTranscriptContext(allMessages);
+      log.info(
+        `FALLBACK (${reason}): ${allMessages.length} messages, ${transcriptContext.length} chars extracted`,
+      );
+
+      return transcriptContext
+        ? `${FALLBACK_SUMMARY}\n\n## Recent Context (from transcript):\n${transcriptContext}${toolFailureSection}${fileOpsSummary}`
+        : fallbackSummary;
+    };
+
     const model = ctx.model;
     if (!model) {
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback("no model in ctx.model"),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
@@ -215,7 +279,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     if (!apiKey) {
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback(`no API key for model ${model.id ?? model}`),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
@@ -366,7 +430,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: buildTranscriptFallback(`summarization failed: ${error instanceof Error ? error.message : String(error)}`),
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
@@ -379,6 +443,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 export const __testing = {
   collectToolFailures,
   formatToolFailuresSection,
+  extractRecentTranscriptContext,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   BASE_CHUNK_RATIO,
