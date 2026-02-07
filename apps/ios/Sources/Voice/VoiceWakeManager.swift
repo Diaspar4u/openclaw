@@ -257,6 +257,8 @@ final class VoiceWakeManager: NSObject {
         let inputNode = self.audioEngine.inputNode
         inputNode.removeTap(onBus: 0)
 
+        self.audioEngine.prepare()
+
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
         let queue = AudioBufferQueue()
@@ -268,7 +270,6 @@ final class VoiceWakeManager: NSObject {
             format: recordingFormat,
             block: tapBlock)
 
-        self.audioEngine.prepare()
         try self.audioEngine.start()
 
         let handler = self.makeRecognitionResultHandler()

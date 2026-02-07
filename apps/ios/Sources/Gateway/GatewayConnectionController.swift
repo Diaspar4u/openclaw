@@ -208,7 +208,7 @@ final class GatewayConnectionController {
         let connectOptions = self.makeConnectOptions()
 
         Task { [weak self] in
-            guard let self else { return }
+            guard self != nil else { return }
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }

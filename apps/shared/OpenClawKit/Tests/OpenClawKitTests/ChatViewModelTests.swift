@@ -157,21 +157,29 @@ extension TestChatTransportState {
             thinkingLevel: "off")
 
         let transport = TestChatTransport(historyResponses: [history1, history2])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
+        try await waitUntil("bootstrap") {
+            await MainActor.run { vm.healthOK && vm.sessionId == sessionId }
+        }
 
         await MainActor.run {
             vm.input = "hi"
             vm.send()
         }
-        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
 
         transport.emit(
             .agent(
                 OpenClawAgentEventPayload(
-                    runId: sessionId,
+                    runId: runId,
                     seq: 1,
                     stream: "assistant",
                     ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -184,7 +192,7 @@ extension TestChatTransportState {
         transport.emit(
             .agent(
                 OpenClawAgentEventPayload(
-                    runId: sessionId,
+                    runId: runId,
                     seq: 2,
                     stream: "tool",
                     ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -195,9 +203,10 @@ extension TestChatTransportState {
                         "args": AnyCodable(["x": 1]),
                     ])))
 
-        try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
+        try await waitUntil("tool call pending") {
+            await MainActor.run { vm.pendingToolCalls.count == 1 }
+        }
 
-        let runId = try #require(await transport.lastSentRunId())
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
@@ -207,15 +216,19 @@ extension TestChatTransportState {
                     message: nil,
                     errorMessage: nil)))
 
-        try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+        try await waitUntil("pending run clears") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
         try await waitUntil("history refresh") {
-            await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+            await MainActor.run {
+                vm.messages.contains(where: { $0.role == "assistant" })
+            }
         }
         #expect(await MainActor.run { vm.streamingAssistantText } == nil)
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
     }
 
-    @Test func clearsStreamingOnExternalFinalEvent() async throws {
+    @Test func clearsStreamingOnFinalEvent() async throws {
         let sessionId = "sess-main"
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
@@ -223,24 +236,38 @@ extension TestChatTransportState {
             messages: [],
             thinkingLevel: "off")
         let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
+        try await waitUntil("bootstrap") {
+            await MainActor.run { vm.healthOK && vm.sessionId == sessionId }
+        }
+
+        await MainActor.run {
+            vm.input = "hi"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
 
         transport.emit(
             .agent(
                 OpenClawAgentEventPayload(
-                    runId: sessionId,
+                    runId: runId,
                     seq: 1,
                     stream: "assistant",
                     ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: ["text": AnyCodable("external stream")])))
+                    data: ["text": AnyCodable("streaming text")])))
 
         transport.emit(
             .agent(
                 OpenClawAgentEventPayload(
-                    runId: sessionId,
+                    runId: runId,
                     seq: 2,
                     stream: "tool",
                     ts: Int(Date().timeIntervalSince1970 * 1000),
@@ -252,21 +279,26 @@ extension TestChatTransportState {
                     ])))
 
         try await waitUntil("streaming active") {
-            await MainActor.run { vm.streamingAssistantText == "external stream" }
+            await MainActor.run { vm.streamingAssistantText == "streaming text" }
         }
-        try await waitUntil("tool call pending") { await MainActor.run { vm.pendingToolCalls.count == 1 } }
+        try await waitUntil("tool call pending") {
+            await MainActor.run { vm.pendingToolCalls.count == 1 }
+        }
 
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
-                    runId: "other-run",
+                    runId: runId,
                     sessionKey: "main",
                     state: "final",
                     message: nil,
                     errorMessage: nil)))
 
-        try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
+        try await waitUntil("streaming cleared") {
+            await MainActor.run { vm.streamingAssistantText == nil }
+        }
         #expect(await MainActor.run { vm.pendingToolCalls.isEmpty })
+        #expect(await MainActor.run { vm.pendingRunCount } == 0)
     }
 
     @Test func sessionChoicesPreferMainAndRecent() async throws {
@@ -420,7 +452,7 @@ extension TestChatTransportState {
         #expect(keys == ["main", "custom"])
     }
 
-    @Test func clearsStreamingOnExternalErrorEvent() async throws {
+    @Test func clearsStreamingOnErrorEvent() async throws {
         let sessionId = "sess-main"
         let history = OpenClawChatHistoryPayload(
             sessionKey: "main",
@@ -428,34 +460,53 @@ extension TestChatTransportState {
             messages: [],
             thinkingLevel: "off")
         let transport = TestChatTransport(historyResponses: [history, history])
-        let vm = await MainActor.run { OpenClawChatViewModel(sessionKey: "main", transport: transport) }
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
 
         await MainActor.run { vm.load() }
-        try await waitUntil("bootstrap") { await MainActor.run { vm.healthOK && vm.sessionId == sessionId } }
+        try await waitUntil("bootstrap") {
+            await MainActor.run { vm.healthOK && vm.sessionId == sessionId }
+        }
+
+        await MainActor.run {
+            vm.input = "hi"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
 
         transport.emit(
             .agent(
                 OpenClawAgentEventPayload(
-                    runId: sessionId,
+                    runId: runId,
                     seq: 1,
                     stream: "assistant",
                     ts: Int(Date().timeIntervalSince1970 * 1000),
-                    data: ["text": AnyCodable("external stream")])))
+                    data: ["text": AnyCodable("streaming text")])))
 
         try await waitUntil("streaming active") {
-            await MainActor.run { vm.streamingAssistantText == "external stream" }
+            await MainActor.run { vm.streamingAssistantText == "streaming text" }
         }
 
         transport.emit(
             .chat(
                 OpenClawChatEventPayload(
-                    runId: "other-run",
+                    runId: runId,
                     sessionKey: "main",
                     state: "error",
                     message: nil,
                     errorMessage: "boom")))
 
-        try await waitUntil("streaming cleared") { await MainActor.run { vm.streamingAssistantText == nil } }
+        try await waitUntil("streaming cleared") {
+            await MainActor.run { vm.streamingAssistantText == nil }
+        }
+        #expect(
+            await MainActor.run { vm.errorText } == "boom")
+        #expect(await MainActor.run { vm.pendingRunCount } == 0)
     }
 
     @Test func abortRequestsDoNotClearPendingUntilAbortedEvent() async throws {
@@ -497,6 +548,120 @@ extension TestChatTransportState {
                     message: nil,
                     errorMessage: nil)))
 
-        try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
+        try await waitUntil("pending run clears") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+    }
+
+    @Test func duplicateFinalEventIsIgnored() async throws {
+        let sessionId = "sess-main"
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: sessionId,
+            messages: [],
+            thinkingLevel: "off")
+        let transport = TestChatTransport(
+            historyResponses: [history, history, history])
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") {
+            await MainActor.run { vm.healthOK && vm.sessionId == sessionId }
+        }
+
+        await MainActor.run {
+            vm.input = "hi"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        try await waitUntil("pending run clears") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+
+        // Emit the same final event again — should be deduplicated.
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: nil,
+                    errorMessage: nil)))
+
+        // Give event loop a moment to process.
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run { vm.pendingRunCount } == 0)
+        #expect(await MainActor.run { vm.errorText } == nil)
+    }
+
+    @Test func agentEventsFilteredByPendingRunId() async throws {
+        let sessionId = "sess-main"
+        let history = OpenClawChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: sessionId,
+            messages: [],
+            thinkingLevel: "off")
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") {
+            await MainActor.run { vm.healthOK && vm.sessionId == sessionId }
+        }
+
+        await MainActor.run {
+            vm.input = "hi"
+            vm.send()
+        }
+        try await waitUntil("pending run starts") {
+            await MainActor.run { vm.pendingRunCount == 1 }
+        }
+
+        let runId = try #require(await transport.lastSentRunId())
+
+        // Agent event with unknown runId — should be ignored.
+        transport.emit(
+            .agent(
+                OpenClawAgentEventPayload(
+                    runId: "unknown-run",
+                    seq: 1,
+                    stream: "assistant",
+                    ts: Int(Date().timeIntervalSince1970 * 1000),
+                    data: ["text": AnyCodable("should not appear")])))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run { vm.streamingAssistantText } == nil)
+
+        // Agent event with correct runId — should show streaming text.
+        transport.emit(
+            .agent(
+                OpenClawAgentEventPayload(
+                    runId: runId,
+                    seq: 2,
+                    stream: "assistant",
+                    ts: Int(Date().timeIntervalSince1970 * 1000),
+                    data: ["text": AnyCodable("real stream")])))
+
+        try await waitUntil("streaming visible") {
+            await MainActor.run { vm.streamingAssistantText == "real stream" }
+        }
     }
 }

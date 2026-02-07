@@ -5,7 +5,6 @@ import Foundation
 
 struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
     private let gateway: GatewayNodeSession
-
     init(gateway: GatewayNodeSession) {
         self.gateway = gateway
     }
@@ -83,7 +82,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport, Sendable {
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
-        AsyncStream { continuation in
+        return AsyncStream { continuation in
             let task = Task {
                 let stream = await self.gateway.subscribeServerEvents()
                 for await evt in stream {

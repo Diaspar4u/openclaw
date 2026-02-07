@@ -42,6 +42,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+    private var finalizedRunIds = Set<String>()
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -55,17 +56,6 @@ public final class OpenClawChatViewModel {
     public init(sessionKey: String, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
         self.transport = transport
-
-        self.eventTask = Task { [weak self] in
-            guard let self else { return }
-            let stream = self.transport.events()
-            for await evt in stream {
-                if Task.isCancelled { return }
-                await MainActor.run { [weak self] in
-                    self?.handleTransportEvent(evt)
-                }
-            }
-        }
     }
 
     deinit {
@@ -76,7 +66,22 @@ public final class OpenClawChatViewModel {
     }
 
     public func load() {
+        self.startEventStreamIfNeeded()
         Task { await self.bootstrap() }
+    }
+
+    private func startEventStreamIfNeeded() {
+        guard self.eventTask == nil else { return }
+        self.eventTask = Task { [weak self] in
+            guard let transport = self?.transport else { return }
+            let stream = transport.events()
+            for await evt in stream {
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    self?.handleTransportEvent(evt)
+                }
+            }
+        }
     }
 
     public func refresh() {
@@ -228,6 +233,7 @@ public final class OpenClawChatViewModel {
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
         self.pendingRuns.insert(runId)
+        self.finalizedRunIds.removeAll()
         self.armPendingRunTimeout(runId: runId)
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
@@ -375,6 +381,16 @@ public final class OpenClawChatViewModel {
             return
         }
 
+        // Deduplicate terminal events — gateway broadcasts each event twice (sequenced + subscription).
+        if let runId = chat.runId, let state = chat.state,
+           state == "final" || state == "aborted" || state == "error"
+        {
+            guard !self.finalizedRunIds.contains(runId) else {
+                return
+            }
+            self.finalizedRunIds.insert(runId)
+        }
+
         let isOurRun = chat.runId.flatMap { self.pendingRuns.contains($0) } ?? false
         if !isOurRun {
             // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
@@ -408,9 +424,7 @@ public final class OpenClawChatViewModel {
     }
 
     private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        if let sessionId, evt.runId != sessionId {
-            return
-        }
+        guard self.pendingRuns.contains(evt.runId) else { return }
 
         switch evt.stream {
         case "assistant":
@@ -440,13 +454,14 @@ public final class OpenClawChatViewModel {
     private func refreshHistoryAfterRun() async {
         do {
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.decodeMessages(payload.messages ?? [])
+            let decoded = Self.decodeMessages(payload.messages ?? [])
+            self.messages = decoded
             self.sessionId = payload.sessionId
             if let level = payload.thinkingLevel, !level.isEmpty {
                 self.thinkingLevel = level
             }
         } catch {
-            chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
+            chatUILogger.error("refreshHistoryAfterRun failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

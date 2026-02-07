@@ -54,6 +54,10 @@ final class TalkModeManager: NSObject {
         self.gateway = gateway
     }
 
+    func clearChatSubscriptions() {
+        self.chatSubscribedSessionKeys.removeAll()
+    }
+
     func updateMainSessionKey(_ sessionKey: String?) {
         let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -151,31 +155,45 @@ final class TalkModeManager: NSObject {
         guard let request = self.recognitionRequest else { return }
 
         let input = self.audioEngine.inputNode
+        input.removeTap(onBus: 0)
+
+        self.audioEngine.prepare()
+
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else {
             throw NSError(domain: "TalkMode", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "Invalid audio input format",
             ])
         }
-        input.removeTap(onBus: 0)
         let tapBlock = Self.makeAudioTapAppendCallback(request: request)
         input.installTap(onBus: 0, bufferSize: 2048, format: format, block: tapBlock)
 
-        self.audioEngine.prepare()
         try self.audioEngine.start()
 
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let error {
-                if !self.isSpeaking {
-                    self.statusText = "Speech error: \(error.localizedDescription)"
-                }
-                self.logger.debug("speech recognition error: \(error.localizedDescription, privacy: .public)")
-            }
-            guard let result else { return }
-            let transcript = result.bestTranscription.formattedString
+            let errorText = error?.localizedDescription
+            let transcript = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
             Task { @MainActor in
-                await self.handleTranscript(transcript: transcript, isFinal: result.isFinal)
+                guard let self else { return }
+                if let errorText {
+                    self.logger.debug(
+                        "speech recognition error: \(errorText, privacy: .public)")
+                    if !self.isSpeaking, self.isEnabled {
+                        try? await Task.sleep(nanoseconds: 700_000_000)
+                        guard self.isEnabled, !self.isSpeaking else { return }
+                        do {
+                            try self.startRecognition()
+                        } catch {
+                            self.isListening = false
+                            self.statusText = "Restart failed"
+                        }
+                    }
+                    return
+                }
+                guard let transcript else { return }
+                await self.handleTranscript(
+                    transcript: transcript, isFinal: isFinal)
             }
         }
     }
@@ -259,33 +277,49 @@ final class TalkModeManager: NSObject {
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             let runId = try await self.sendChat(prompt, gateway: gateway)
             self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
-            let completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
-            if completion == .timeout {
+            let completion = await self.waitForChatCompletion(
+                runId: runId, gateway: gateway, timeoutSeconds: 120)
+            switch completion {
+            case .aborted:
+                self.statusText = "Aborted"
+                self.logger.warning(
+                    "chat completion aborted runId=\(runId, privacy: .public)")
+                await self.start()
+                return
+            case .error:
+                self.statusText = "Chat error"
+                self.logger.warning(
+                    "chat completion error runId=\(runId, privacy: .public)")
+                await self.start()
+                return
+            case let .final(messageText):
+                if let text = messageText {
+                    self.logger.info(
+                        "assistant text from event chars=\(text.count, privacy: .public)")
+                    await self.playAssistant(text: text)
+                    await self.start()
+                    return
+                }
+                self.logger.info(
+                    "final event had no message text, falling back to history")
+            case .timeout:
                 self.logger.warning(
                     "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
-            } else if completion == .aborted {
-                self.statusText = "Aborted"
-                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                await self.start()
-                return
-            } else if completion == .error {
-                self.statusText = "Chat error"
-                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                await self.start()
-                return
             }
 
             guard let assistantText = try await self.waitForAssistantText(
                 gateway: gateway,
                 since: startedAt,
-                timeoutSeconds: completion == .final ? 12 : 25)
+                timeoutSeconds: 12)
             else {
                 self.statusText = "No reply"
-                self.logger.warning("assistant text timeout runId=\(runId, privacy: .public)")
+                self.logger.warning(
+                    "assistant text timeout runId=\(runId, privacy: .public)")
                 await self.start()
                 return
             }
-            self.logger.info("assistant text ok chars=\(assistantText.count, privacy: .public)")
+            self.logger.info(
+                "assistant text from history chars=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
         } catch {
             self.statusText = "Talk failed: \(error.localizedDescription)"
@@ -324,7 +358,7 @@ final class TalkModeManager: NSObject {
     }
 
     private enum ChatCompletionState: CustomStringConvertible {
-        case final
+        case final(messageText: String?)
         case aborted
         case error
         case timeout
@@ -368,6 +402,7 @@ final class TalkModeManager: NSObject {
         let stream = await gateway.subscribeServerEvents(bufferingNewest: 200)
         return await withTaskGroup(of: ChatCompletionState.self) { group in
             group.addTask { [runId] in
+                var lastDeltaText: String?
                 for await evt in stream {
                     if Task.isCancelled { return .timeout }
                     guard evt.event == "chat", let payload = evt.payload else { continue }
@@ -377,7 +412,24 @@ final class TalkModeManager: NSObject {
                     guard chatEvent.runid == runId else { continue }
                     if let state = chatEvent.state.value as? String {
                         switch state {
-                        case "final": return .final
+                        case "delta":
+                            if let raw = chatEvent.message?.value,
+                               let dict = TalkModeManager.unwrapAnyCodable(raw)
+                                as? [String: Any]
+                            {
+                                lastDeltaText = TalkModeManager.parseAssistantText(
+                                    from: [dict])
+                            }
+                        case "final":
+                            var text: String?
+                            if let raw = chatEvent.message?.value,
+                               let dict = TalkModeManager.unwrapAnyCodable(raw)
+                                as? [String: Any]
+                            {
+                                text = TalkModeManager.parseAssistantText(
+                                    from: [dict])
+                            }
+                            return .final(messageText: text ?? lastDeltaText)
                         case "aborted": return .aborted
                         case "error": return .error
                         default: break
@@ -403,7 +455,9 @@ final class TalkModeManager: NSObject {
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
-            if let text = try await self.fetchLatestAssistantText(gateway: gateway, since: since) {
+            if let text = try await self.fetchLatestAssistantText(
+                gateway: gateway, since: since)
+            {
                 return text
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -411,26 +465,66 @@ final class TalkModeManager: NSObject {
         return nil
     }
 
-    private func fetchLatestAssistantText(gateway: GatewayNodeSession, since: Double? = nil) async throws -> String? {
+    /// Recursively unwrap AnyCodable wrappers into plain Foundation types.
+    nonisolated static func unwrapAnyCodable(_ value: Any) -> Any {
+        if let ac = value as? OpenClawProtocol.AnyCodable {
+            return unwrapAnyCodable(ac.value)
+        }
+        if let dict = value as? [String: OpenClawProtocol.AnyCodable] {
+            return dict.mapValues { unwrapAnyCodable($0) }
+        }
+        if let arr = value as? [OpenClawProtocol.AnyCodable] {
+            return arr.map { unwrapAnyCodable($0) }
+        }
+        return value
+    }
+
+    nonisolated static func parseAssistantText(
+        from messages: [[String: Any]],
+        since: Double? = nil
+    ) -> String? {
+        for msg in messages.reversed() {
+            guard (msg["role"] as? String) == "assistant" else { continue }
+            if let since, let timestamp = msg["timestamp"] as? Double,
+               TalkHistoryTimestamp.isAfter(
+                   timestamp, sinceSeconds: since) == false
+            {
+                continue
+            }
+            if let content = msg["content"] as? [[String: Any]] {
+                let text = content.compactMap { $0["text"] as? String }
+                    .joined(separator: "\n")
+                let trimmed = text.trimmingCharacters(
+                    in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            } else if let content = msg["content"] as? String {
+                let trimmed = content.trimmingCharacters(
+                    in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
+    private func fetchLatestAssistantText(
+        gateway: GatewayNodeSession,
+        since: Double? = nil
+    ) async throws -> String? {
         let res = try await gateway.request(
             method: "chat.history",
             paramsJSON: "{\"sessionKey\":\"\(self.mainSessionKey)\"}",
             timeoutSeconds: 15)
-        guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return nil }
-        guard let messages = json["messages"] as? [[String: Any]] else { return nil }
-        for msg in messages.reversed() {
-            guard (msg["role"] as? String) == "assistant" else { continue }
-            if let since, let timestamp = msg["timestamp"] as? Double,
-               TalkHistoryTimestamp.isAfter(timestamp, sinceSeconds: since) == false
-            {
-                continue
-            }
-            guard let content = msg["content"] as? [[String: Any]] else { continue }
-            let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty { return trimmed }
+        guard let json = try JSONSerialization.jsonObject(
+            with: res) as? [String: Any] else
+        {
+            return nil
         }
-        return nil
+        guard let messages = json["messages"]
+            as? [[String: Any]] else
+        {
+            return nil
+        }
+        return Self.parseAssistantText(from: messages, since: since)
     }
 
     private func playAssistant(text: String) async {
@@ -481,13 +575,15 @@ final class TalkModeManager: NSObject {
                 let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(requestedOutputFormat ?? "pcm_44100")
+                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(requestedOutputFormat ?? "pcm_24000")
                 if outputFormat == nil, let requestedOutputFormat {
                     self.logger.warning(
                         "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
                 }
 
                 let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+                self.logger.info(
+                    "tts elevenlabs keyLen=\(apiKey.count) voice=\(voiceId, privacy: .public) model=\(modelId ?? "nil", privacy: .public) fmt=\(outputFormat ?? "nil", privacy: .public)")
                 func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
                     ElevenLabsTTSRequest(
                         text: cleaned,
@@ -507,19 +603,39 @@ final class TalkModeManager: NSObject {
                 let request = makeRequest(outputFormat: outputFormat)
 
                 let client = ElevenLabsTTSClient(apiKey: apiKey)
-                let stream = client.streamSynthesize(voiceId: voiceId, request: request)
+                let rawStream = client.streamSynthesize(voiceId: voiceId, request: request)
 
-                if self.interruptOnSpeech {
-                    do {
-                        try self.startRecognition()
-                    } catch {
-                        self.logger.warning(
-                            "startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
+                // Wrap stream to log first chunk and errors without per-chunk spam.
+                let logger = self.logger
+                let stream = AsyncThrowingStream<Data, Error> { continuation in
+                    Task {
+                        var chunkCount = 0
+                        var totalBytes = 0
+                        do {
+                            for try await chunk in rawStream {
+                                chunkCount += 1
+                                totalBytes += chunk.count
+                                if chunkCount == 1 {
+                                    logger.info("tts stream first chunk bytes=\(chunk.count)")
+                                }
+                                continuation.yield(chunk)
+                            }
+                            logger.info("tts stream done chunks=\(chunkCount) totalBytes=\(totalBytes)")
+                            continuation.finish()
+                        } catch {
+                            logger.error("tts stream error after \(chunkCount) chunks: \(error.localizedDescription, privacy: .public)")
+                            continuation.finish(throwing: error)
+                        }
                     }
                 }
 
+                // Stop recognition during ElevenLabs playback to avoid
+                // dual-AVAudioEngine conflicts (recognition input + PCM output).
+                self.stopRecognition()
+
                 self.statusText = "Speaking…"
                 let sampleRate = TalkTTSValidation.pcmSampleRate(from: outputFormat)
+                self.logger.info("tts playback starting pcm=\(sampleRate != nil) sampleRate=\(sampleRate ?? 0)")
                 let result: StreamingPlaybackResult
                 if let sampleRate {
                     self.lastPlaybackWasPCM = true

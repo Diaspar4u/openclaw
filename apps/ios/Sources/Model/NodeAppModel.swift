@@ -175,6 +175,7 @@ final class NodeAppModel {
         switch phase {
         case .background:
             self.isBackgrounded = true
+            self.talkMode.stop()
         case .active, .inactive:
             self.isBackgrounded = false
         @unknown default:
@@ -230,8 +231,6 @@ final class NodeAppModel {
                     } else {
                         self.gatewayStatusText = "Reconnecting…"
                     }
-                    self.gatewayServerName = nil
-                    self.gatewayRemoteAddress = nil
                 }
 
                 do {
@@ -253,6 +252,12 @@ final class NodeAppModel {
                                     self.gatewayRemoteAddress = addr
                                 }
                             }
+                            let sessionKey = await MainActor.run {
+                                self.talkMode.clearChatSubscriptions()
+                                return self.mainSessionKey
+                            }
+                            let payload = "{\"sessionKey\":\"\(sessionKey)\"}"
+                            await self.gateway.sendEvent(event: "chat.subscribe", payloadJSON: payload)
                             await self.refreshBrandingFromGateway()
                             await self.startVoiceWakeSync()
                             await self.showA2UIOnConnectIfNeeded()

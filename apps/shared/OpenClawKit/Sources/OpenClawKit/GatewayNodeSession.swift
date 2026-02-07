@@ -138,7 +138,7 @@ public actor GatewayNodeSession {
                 },
                 connectOptions: connectOptions,
                 disconnectHandler: { [weak self] reason in
-                    await self?.onDisconnected?(reason)
+                    await self?.handleDisconnect(reason)
                 })
             self.channel = channel
             self.activeURL = url
@@ -282,6 +282,12 @@ public actor GatewayNodeSession {
                 waiter.resume(returning: false)
             }
         }
+    }
+
+    private func handleDisconnect(_ reason: String) async {
+        self.hasNotifiedConnected = false
+        self.snapshotReceived = false
+        await self.onDisconnected?(reason)
     }
 
     private func notifyConnectedIfNeeded() async {
