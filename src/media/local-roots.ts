@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
@@ -29,12 +30,17 @@ function buildMediaLocalRoots(
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
-  return [
+  const systemTmpDir = path.resolve(os.tmpdir());
+  const roots = [
     preferredTmpDir,
     path.join(resolvedStateDir, "media"),
     path.join(resolvedStateDir, "workspace"),
     path.join(resolvedStateDir, "sandboxes"),
   ];
+  if (systemTmpDir !== preferredTmpDir && !roots.includes(systemTmpDir)) {
+    roots.push(systemTmpDir);
+  }
+  return roots;
 }
 
 export function getDefaultMediaLocalRoots(): readonly string[] {
