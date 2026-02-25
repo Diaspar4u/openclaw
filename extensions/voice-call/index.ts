@@ -386,11 +386,14 @@ export default definePluginEntry({
             return;
           }
           const rt = await ensureRuntime();
+          const mode =
+            params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
           await initiateCallAndRespond({
             rt,
             respond,
             to,
             message: message || undefined,
+            mode,
           });
         } catch (err) {
           sendError(respond, err);
@@ -525,7 +528,6 @@ export default definePluginEntry({
         registerVoiceCallCli({
           program,
           config,
-          ensureRuntime,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },
