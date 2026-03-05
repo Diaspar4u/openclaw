@@ -32,6 +32,7 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    includeKeys?: string[];
   },
 ) {
   if (!state.client || !state.connected) {
@@ -56,6 +57,9 @@ export async function loadSessions(
     }
     if (limit > 0) {
       params.limit = limit;
+    }
+    if (overrides?.includeKeys?.length) {
+      params.includeKeys = overrides.includeKeys;
     }
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
