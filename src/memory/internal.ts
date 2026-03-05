@@ -91,15 +91,41 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+async function walkDir(
+  dir: string,
+  files: string[],
+  multimodal?: MemoryMultimodalSettings,
+  visited?: Set<string>,
+) {
+  const seen = visited ?? new Set<string>();
+  let realDir: string;
+  try {
+    realDir = await fs.realpath(dir);
+  } catch {
+    return; // Broken symlink or inaccessible
+  }
+  if (seen.has(realDir)) {
+    return; // Cycle detected — prevent infinite recursion
+  }
+  seen.add(realDir);
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) {
+      try {
+        const targetStat = await fs.stat(full);
+        if (targetStat.isDirectory()) {
+          await walkDir(full, files, multimodal, seen);
+        } else if (targetStat.isFile() && isAllowedMemoryFilePath(full, multimodal)) {
+          files.push(full);
+        }
+      } catch {
+        // Skip broken symlinks, circular symlinks (ELOOP), and permission errors
+      }
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files, multimodal);
+      await walkDir(full, files, multimodal, seen);
       continue;
     }
     if (!entry.isFile()) {
@@ -124,8 +150,8 @@ export async function listMemoryFiles(
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
+      const stat = await fs.stat(absPath);
+      if (!stat.isFile()) {
         return;
       }
       if (!absPath.endsWith(".md")) {
@@ -138,8 +164,8 @@ export async function listMemoryFiles(
   await addMarkdownFile(memoryFile);
   await addMarkdownFile(altMemoryFile);
   try {
-    const dirStat = await fs.lstat(memoryDir);
-    if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+    const dirStat = await fs.stat(memoryDir);
+    if (dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
   } catch {}
@@ -148,10 +174,7 @@ export async function listMemoryFiles(
   if (normalizedExtraPaths.length > 0) {
     for (const inputPath of normalizedExtraPaths) {
       try {
-        const stat = await fs.lstat(inputPath);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
+        const stat = await fs.stat(inputPath);
         if (stat.isDirectory()) {
           await walkDir(inputPath, result, multimodal);
           continue;
