@@ -10,6 +10,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
+  SCHEDULED_RESTART_MAX_WAIT_MS,
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
@@ -219,7 +220,7 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
+        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs ?? SCHEDULED_RESTART_MAX_WAIT_MS,
         hooks: {
           onReady: () => {
             restartPending = false;
