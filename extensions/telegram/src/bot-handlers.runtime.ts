@@ -53,6 +53,7 @@ import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
+  resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
@@ -108,6 +109,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps = defaultTelegramBotDeps,
+  registerDeferredWork,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
@@ -132,9 +134,19 @@ export const registerTelegramHandlers = ({
     key: string;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
+    /** Deferred-work resolvers for webhook queue tracking. */
+    deferredResolvers?: Array<() => void>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   let textFragmentProcessing: Promise<void> = Promise.resolve();
+
+  // Register a deferred-work promise for the given update_id so the webhook
+  // queue does not dequeue the update until the deferred processing completes.
+  const registerDeferred = (updateId: number | undefined, promise: Promise<void>) => {
+    if (typeof updateId === "number" && registerDeferredWork) {
+      registerDeferredWork(updateId, promise);
+    }
+  };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
@@ -147,6 +159,8 @@ export const registerTelegramHandlers = ({
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
+    /** Resolve function for webhook queue deferred-work tracking. */
+    deferredResolve?: () => void;
   };
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
     const forwardMeta = msg as {
@@ -211,43 +225,54 @@ export const registerTelegramHandlers = ({
       return entry.allMedia.length === 0;
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
+      try {
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
+          await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
+          return;
+        }
+        const combinedText = entries
+          .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
+          .filter(Boolean)
+          .join("\n");
+        const combinedMedia = entries.flatMap((entry) => entry.allMedia);
+        if (!combinedText.trim() && combinedMedia.length === 0) {
+          return;
+        }
+        const first = entries[0];
+        const baseCtx = first.ctx;
+        const syntheticMessage = buildSyntheticTextMessage({
+          base: first.msg,
+          text: combinedText,
+          date: last.msg.date ?? first.msg.date,
+        });
+        const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
+        const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+        const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
+        await processMessage(
+          syntheticCtx,
+          combinedMedia,
+          first.storeAllowFrom,
+          messageIdOverride ? { messageIdOverride } : undefined,
+          replyMedia,
+        );
+      } finally {
+        for (const entry of entries) {
+          entry.deferredResolve?.();
+        }
       }
-      if (entries.length === 1) {
-        const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.msg.text ?? entry.msg.caption ?? "")
-        .filter(Boolean)
-        .join("\n");
-      const combinedMedia = entries.flatMap((entry) => entry.allMedia);
-      if (!combinedText.trim() && combinedMedia.length === 0) {
-        return;
-      }
-      const first = entries[0];
-      const baseCtx = first.ctx;
-      const syntheticMessage = buildSyntheticTextMessage({
-        base: first.msg,
-        text: combinedText,
-        date: last.msg.date ?? first.msg.date,
-      });
-      const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
-      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
-      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
-      await processMessage(
-        syntheticCtx,
-        combinedMedia,
-        first.storeAllowFrom,
-        messageIdOverride ? { messageIdOverride } : undefined,
-        replyMedia,
-      );
     },
     onError: (err, items) => {
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      // Defense-in-depth: onFlush's finally already resolves these, but if it
+      // somehow didn't run, resolve here to prevent the middleware from hanging.
+      for (const item of items) {
+        item.deferredResolve?.();
+      }
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
         const threadId = items[0]?.msg.message_thread_id;
@@ -383,6 +408,10 @@ export const registerTelegramHandlers = ({
       await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
+    } finally {
+      for (const resolve of entry.deferredResolvers ?? []) {
+        resolve();
+      }
     }
   };
 
@@ -415,6 +444,10 @@ export const registerTelegramHandlers = ({
       });
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
+    } finally {
+      for (const resolve of entry.deferredResolvers ?? []) {
+        resolve();
+      }
     }
   };
 
@@ -863,6 +896,8 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    /** Telegram update_id for deferred-work tracking (webhook queue). */
+    updateId?: number;
   }) => {
     const {
       ctx,
@@ -873,6 +908,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
+      updateId,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -910,6 +946,12 @@ export const registerTelegramHandlers = ({
             nextTotalChars <= TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS
           ) {
             existing.messages.push({ msg, ctx, receivedAtMs: nowMs });
+            if (typeof updateId === "number" && registerDeferredWork) {
+              const deferred = new Promise<void>((resolve) => {
+                (existing.deferredResolvers ??= []).push(resolve);
+              });
+              registerDeferred(updateId, deferred);
+            }
             scheduleTextFragmentFlush(existing);
             return;
           }
@@ -933,6 +975,12 @@ export const registerTelegramHandlers = ({
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
           timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
         };
+        if (typeof updateId === "number" && registerDeferredWork) {
+          const deferred = new Promise<void>((resolve) => {
+            (entry.deferredResolvers ??= []).push(resolve);
+          });
+          registerDeferred(updateId, deferred);
+        }
         textFragmentBuffer.set(key, entry);
         scheduleTextFragmentFlush(entry);
         return;
@@ -946,6 +994,12 @@ export const registerTelegramHandlers = ({
       if (existing) {
         clearTimeout(existing.timer);
         existing.messages.push({ msg, ctx });
+        if (typeof updateId === "number" && registerDeferredWork) {
+          const deferred = new Promise<void>((resolve) => {
+            (existing.deferredResolvers ??= []).push(resolve);
+          });
+          registerDeferred(updateId, deferred);
+        }
         existing.timer = setTimeout(async () => {
           mediaGroupBuffer.delete(mediaGroupId);
           mediaGroupProcessing = mediaGroupProcessing
@@ -968,6 +1022,12 @@ export const registerTelegramHandlers = ({
             await mediaGroupProcessing;
           }, mediaGroupTimeoutMs),
         };
+        if (typeof updateId === "number" && registerDeferredWork) {
+          const deferred = new Promise<void>((resolve) => {
+            (entry.deferredResolvers ??= []).push(resolve);
+          });
+          registerDeferred(updateId, deferred);
+        }
         mediaGroupBuffer.set(mediaGroupId, entry);
       }
       return;
@@ -1029,6 +1089,13 @@ export const registerTelegramHandlers = ({
     const debounceKey = senderId
       ? `telegram:${accountId ?? "default"}:${conversationKey}:${senderId}:${debounceLane}`
       : null;
+    let deferredResolve: (() => void) | undefined;
+    if (typeof updateId === "number" && registerDeferredWork) {
+      const deferred = new Promise<void>((resolve) => {
+        deferredResolve = resolve;
+      });
+      registerDeferred(updateId, deferred);
+    }
     await inboundDebouncer.enqueue({
       ctx,
       msg,
@@ -1037,6 +1104,7 @@ export const registerTelegramHandlers = ({
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,
+      deferredResolve,
     });
   };
   bot.on("callback_query", async (ctx) => {
@@ -1664,6 +1732,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        updateId: resolveTelegramUpdateId(event.ctxForDedupe),
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
