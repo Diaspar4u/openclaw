@@ -4,6 +4,7 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
+<<<<<<< HEAD
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -18,6 +19,13 @@ import {
 import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
+||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
+import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
+import { textToSpeechTelephony } from "../../tts/tts.js";
+=======
+import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
+import { textToSpeechTelephony, textToSpeechTelephonyStream } from "../../tts/tts.js";
+>>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
@@ -146,6 +154,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
+<<<<<<< HEAD
     tts: { textToSpeech, textToSpeechTelephony, listVoices: listSpeechVoices },
     mediaUnderstanding: {
       runFile: runMediaUnderstandingFile,
@@ -162,6 +171,11 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
+||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
+    tts: { textToSpeechTelephony },
+=======
+    tts: { textToSpeechTelephony, textToSpeechTelephonyStream },
+>>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
     stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),

@@ -47,6 +47,7 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
   tts: {
+<<<<<<< HEAD
     textToSpeech: typeof import("../../tts/runtime.js").textToSpeech;
     textToSpeechTelephony: typeof import("../../tts/runtime.js").textToSpeechTelephony;
     listVoices: typeof import("../../tts/runtime.js").listSpeechVoices;
@@ -65,6 +66,12 @@ export type PluginRuntimeCore = {
   webSearch: {
     listProviders: typeof import("../../web-search/runtime.js").listWebSearchProviders;
     search: typeof import("../../web-search/runtime.js").runWebSearch;
+||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
+    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+=======
+    textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
+    textToSpeechTelephonyStream?: typeof import("../../tts/tts.js").textToSpeechTelephonyStream;
+>>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
   };
   stt: {
     transcribeAudioFile: typeof import("../../media-understanding/transcribe-audio.js").transcribeAudioFile;
