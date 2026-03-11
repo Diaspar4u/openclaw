@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { OCG_APPROVE_CALLBACK_DATA, recordMutationApproval } from "../agents/mutation-gate.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -290,6 +291,7 @@ export const registerTelegramHandlers = ({
     senderId?: string | number;
   }): {
     agentId: string;
+    sessionKey: string;
     sessionEntry: ReturnType<typeof loadSessionStore>[string] | undefined;
     model?: string;
   } => {
@@ -329,6 +331,7 @@ export const registerTelegramHandlers = ({
     if (storedOverride) {
       return {
         agentId: route.agentId,
+        sessionKey,
         sessionEntry: entry,
         model: storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
@@ -340,6 +343,7 @@ export const registerTelegramHandlers = ({
     if (provider && model) {
       return {
         agentId: route.agentId,
+        sessionKey,
         sessionEntry: entry,
         model: `${provider}/${model}`,
       };
@@ -347,6 +351,7 @@ export const registerTelegramHandlers = ({
     const modelCfg = cfg.agents?.defaults?.model;
     return {
       agentId: route.agentId,
+      sessionKey,
       sessionEntry: entry,
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
     };
@@ -1321,6 +1326,43 @@ export const registerTelegramHandlers = ({
         }
 
         return;
+      }
+
+      // Mutation gate approval callback
+      if (data === OCG_APPROVE_CALLBACK_DATA) {
+        const { sessionKey } = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+        });
+        // Validate sender is in ownerAllowFrom (global config).
+        // When ownerAllowFrom is not configured, reject — open approval is not safe.
+        const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
+        const normalizedAllowFrom = (ownerAllowFrom ?? []).map((entry) => {
+          const s = String(entry).trim();
+          // Strip "telegram:" prefix if present (ownerAllowFrom entries may be prefixed)
+          const colonIdx = s.indexOf(":");
+          if (colonIdx > 0) {
+            const prefix = s.slice(0, colonIdx).toLowerCase();
+            if (prefix === "telegram" || prefix === "tg") {
+              return s.slice(colonIdx + 1).trim();
+            }
+          }
+          return s;
+        });
+        if (!normalizedAllowFrom.length || !normalizedAllowFrom.includes(senderId)) {
+          try {
+            await editCallbackMessage("\u274c Not authorized to approve mutations.");
+          } catch {}
+          return;
+        }
+        recordMutationApproval(sessionKey, senderId);
+        try {
+          await editCallbackMessage("\u2705 Approved");
+        } catch {}
+        // Fall through to generic handler — agent receives callback data as user input
       }
 
       const syntheticMessage = buildSyntheticTextMessage({

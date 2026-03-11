@@ -1,6 +1,6 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { MutationGateConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -183,6 +183,18 @@ export function resolveToolLoopDetectionConfig(params: {
       ...agent.detectors,
     },
   };
+}
+
+export function resolveMutationGateConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): MutationGateConfig | undefined {
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.mutationGate
+      : undefined;
+  // Agent config overrides global (no merge — flat object).
+  return agent ?? params.cfg?.tools?.mutationGate;
 }
 
 export const __testing = {
@@ -560,6 +572,8 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      mutationGate: resolveMutationGateConfig({ cfg: options?.config, agentId }),
+      agentWorkspace: workspaceRoot,
     }),
   );
   const withAbort = options?.abortSignal
