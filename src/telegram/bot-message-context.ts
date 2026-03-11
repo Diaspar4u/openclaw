@@ -381,7 +381,11 @@ export const buildTelegramMessageContext = async ({
                 ]);
               }
             },
-            // Telegram replaces atomically — no removeReaction needed
+            clearReactions: async () => {
+              if (reactionApi) {
+                await reactionApi(chatId, msg.message_id, []);
+              }
+            },
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis,

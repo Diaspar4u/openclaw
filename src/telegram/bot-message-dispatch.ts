@@ -784,8 +784,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
+    void statusReactionController.clear().catch((err) => {
+      logVerbose(`telegram: status reaction clear failed: ${String(err)}`);
     });
   } else {
     removeAckReactionAfterReply({

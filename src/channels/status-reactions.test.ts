@@ -287,6 +287,55 @@ describe("createStatusReactionController", () => {
     expect(removeCalls.length).toBeGreaterThan(0);
   });
 
+  it("should use clearReactions (single call) when adapter provides it", async () => {
+    const clearReactions = vi.fn(async () => {});
+    const removeReaction = vi.fn(async () => {});
+    const controller = createStatusReactionController({
+      enabled: true,
+      adapter: {
+        setReaction: vi.fn(async () => {}),
+        removeReaction,
+        clearReactions,
+      },
+      initialEmoji: "👀",
+    });
+
+    void controller.setQueued();
+    await vi.runAllTimersAsync();
+
+    // removeReaction may be called during emoji transitions — record count before clear
+    const removeCountBeforeClear = removeReaction.mock.calls.length;
+
+    await controller.clear();
+
+    expect(clearReactions).toHaveBeenCalledOnce();
+    // No additional removeReaction calls from clear() itself
+    expect(removeReaction.mock.calls.length).toBe(removeCountBeforeClear);
+  });
+
+  it("should skip enqueued emoji changes after clear", async () => {
+    const setReaction = vi.fn(async () => {});
+    const controller = createStatusReactionController({
+      enabled: true,
+      adapter: {
+        setReaction,
+        clearReactions: vi.fn(async () => {}),
+      },
+      initialEmoji: "👀",
+    });
+
+    // Schedule a debounced emoji (not yet flushed)
+    void controller.setThinking();
+
+    // Clear before debounce fires
+    await controller.clear();
+
+    // Now flush all timers — the debounced thinking emoji should NOT fire
+    const callCountAfterClear = setReaction.mock.calls.length;
+    await vi.runAllTimersAsync();
+    expect(setReaction.mock.calls.length).toBe(callCountAfterClear);
+  });
+
   it("should handle clear gracefully when adapter lacks removeReaction", async () => {
     const { calls, controller } = createSetOnlyController();
 
