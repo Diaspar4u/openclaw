@@ -1299,6 +1299,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional named export for the internal hook handler function when module default export is not used. Set this when one module ships multiple handler entrypoints.",
   "hooks.internal.entries":
     "Configured internal hook entry records used to register concrete runtime handlers and metadata. Keep entries explicit and versioned so production behavior is auditable.",
+  "hooks.internal.entries.a2a-logging.chatId":
+    "Telegram chat ID where agent-to-agent log messages are posted. Use the numeric chat ID (e.g. -1001234567890) from the target group or channel.",
+  "hooks.internal.entries.a2a-logging.topicId":
+    "Telegram topic (forum thread) ID for agent-to-agent log messages. Set this when the target chat is a forum group to keep logs in a dedicated topic.",
+  "hooks.internal.entries.a2a-logging.token":
+    "Bot token override for the a2a-logging hook. When unset, the hook uses the default Telegram bot token from channels.telegram.botToken. Set this to use a separate bot for logging.",
   "hooks.internal.load":
     "Internal hook loader settings controlling where handler modules are discovered at startup. Use constrained load roots to reduce accidental module conflicts or shadowing.",
   "hooks.internal.load.extraDirs":
