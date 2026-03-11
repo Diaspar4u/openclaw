@@ -292,6 +292,10 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
+  if (isBareSessionReset && cfg.session?.suppressBareResetGreeting) {
+    typing.cleanup();
+    return undefined;
+  }
   const baseBodyFinal = isBareSessionReset ? buildBareSessionResetPrompt(cfg) : baseBody;
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
   const inboundUserContext = buildInboundUserContextPrefix(
