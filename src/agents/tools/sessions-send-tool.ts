@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -286,6 +287,7 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
+        emitA2AHookEvent(opts?.agentSessionKey, resolvedKey, message);
         startA2AFlow(undefined, runId);
         return jsonResult({
           runId,
@@ -304,6 +306,7 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      emitA2AHookEvent(opts?.agentSessionKey, resolvedKey, message);
 
       let waitStatus: string | undefined;
       let waitError: string | undefined;
@@ -364,4 +367,27 @@ export function createSessionsSendTool(opts?: {
       });
     },
   };
+}
+
+function emitA2AHookEvent(
+  sourceSessionKey: string | undefined,
+  resolvedTargetKey: string,
+  message: string,
+): void {
+  if (!sourceSessionKey) {
+    return;
+  }
+  const sourceAgentId = resolveAgentIdFromSessionKey(sourceSessionKey);
+  const targetAgentId = resolveAgentIdFromSessionKey(resolvedTargetKey);
+  if (sourceAgentId && targetAgentId && sourceAgentId !== targetAgentId) {
+    void triggerInternalHook(
+      createInternalHookEvent("agent_to_agent", "send", sourceSessionKey, {
+        sourceSessionKey,
+        sourceAgentId,
+        targetSessionKey: resolvedTargetKey,
+        targetAgentId,
+        message,
+      }),
+    );
+  }
 }
