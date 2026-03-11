@@ -413,6 +413,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
       if (postResetMessage) {
         message = postResetMessage;
+      } else if (cfg.session?.suppressBareResetGreeting) {
+        // Greeting suppressed — reset done, no LLM call needed.
+        respond(true, { reset: true, sessionKey: requestedSessionKey });
+        return;
       } else {
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
