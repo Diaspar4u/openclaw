@@ -12,6 +12,8 @@ export type StatusReactionAdapter = {
   setReaction: (emoji: string) => Promise<void>;
   /** Remove a specific reaction emoji (optional — needed for Discord-style platforms). */
   removeReaction?: (emoji: string) => Promise<void>;
+  /** Clear all reactions atomically (optional — for platforms where one API call clears all). */
+  clearReactions?: () => Promise<void>;
 };
 
 export type StatusReactionEmojis = {
@@ -276,6 +278,9 @@ export function createStatusReactionController(params: {
     if (options.immediate) {
       // Immediate execution for terminal states
       void enqueue(async () => {
+        if (finished) {
+          return;
+        }
         await applyEmoji(emoji);
         pendingEmoji = "";
       });
@@ -283,6 +288,9 @@ export function createStatusReactionController(params: {
       // Debounced execution for intermediate states
       debounceTimer = setTimeout(() => {
         void enqueue(async () => {
+          if (finished) {
+            return;
+          }
           await applyEmoji(emoji);
           pendingEmoji = "";
         });
@@ -353,7 +361,15 @@ export function createStatusReactionController(params: {
     finished = true;
 
     await enqueue(async () => {
-      if (adapter.removeReaction) {
+      if (adapter.clearReactions) {
+        try {
+          await adapter.clearReactions();
+        } catch (err) {
+          if (onError) {
+            onError(err);
+          }
+        }
+      } else if (adapter.removeReaction) {
         // Remove all known emojis (Discord-style)
         const emojisToRemove = Array.from(knownEmojis);
         for (const emoji of emojisToRemove) {
@@ -365,9 +381,6 @@ export function createStatusReactionController(params: {
             }
           }
         }
-      } else {
-        // For platforms without removeReaction, set empty or just skip
-        // (Telegram handles this atomically on the next setReaction)
       }
       currentEmoji = "";
       pendingEmoji = "";
