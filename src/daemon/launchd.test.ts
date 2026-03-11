@@ -304,7 +304,7 @@ describe("launchd install", () => {
     expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
-  it("restarts LaunchAgent with bootout-enable-bootstrap-kickstart order", async () => {
+  it("restarts LaunchAgent with enable-bootout-enable-bootstrap-kickstart order", async () => {
     const env = createDefaultLaunchdEnv();
     await restartLaunchAgent({
       env,
@@ -315,11 +315,16 @@ describe("launchd install", () => {
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
+    // First enable recovers from a previous disable+kill stop
+    const preEnableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === serviceId,
+    );
     const bootoutIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootout" && c[1] === serviceId,
     );
-    const enableIndex = state.launchctlCalls.findIndex(
-      (c) => c[0] === "enable" && c[1] === serviceId,
+    // Second enable clears disabled state after bootout, before bootstrap
+    const postEnableIndex = state.launchctlCalls.findIndex(
+      (c, i) => i > bootoutIndex && c[0] === "enable" && c[1] === `${domain}/${label}`,
     );
     const bootstrapIndex = state.launchctlCalls.findIndex(
       (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
@@ -328,12 +333,14 @@ describe("launchd install", () => {
       (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
     );
 
+    expect(preEnableIndex).toBeGreaterThanOrEqual(0);
     expect(bootoutIndex).toBeGreaterThanOrEqual(0);
-    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(postEnableIndex).toBeGreaterThanOrEqual(0);
     expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
     expect(kickstartIndex).toBeGreaterThanOrEqual(0);
-    expect(bootoutIndex).toBeLessThan(enableIndex);
-    expect(enableIndex).toBeLessThan(bootstrapIndex);
+    expect(preEnableIndex).toBeLessThan(bootoutIndex);
+    expect(bootoutIndex).toBeLessThan(postEnableIndex);
+    expect(postEnableIndex).toBeLessThan(bootstrapIndex);
     expect(bootstrapIndex).toBeLessThan(kickstartIndex);
   });
 
