@@ -451,11 +451,15 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  const serviceTarget = `${domain}/${label}`;
+  // Disable the service so KeepAlive doesn't restart it, then kill the process.
+  // Unlike bootout, this keeps the service loaded so restart/start work without re-install.
+  await execLaunchctl(["disable", serviceTarget]);
+  const res = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 export async function installLaunchAgent({

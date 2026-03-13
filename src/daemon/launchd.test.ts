@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -465,6 +466,31 @@ describe("launchd install", () => {
         programArguments: defaultProgramArguments,
       }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
+});
+
+describe("launchd stop", () => {
+  it("stops with disable+kill instead of bootout", async () => {
+    const env = { HOME: "/Users/test" } as Record<string, string | undefined>;
+    const stdout = new PassThrough();
+    state.launchctlCalls = [];
+
+    await stopLaunchAgent({ env, stdout });
+
+    const domain = `gui/${process.getuid!()}`;
+    const label = "ai.openclaw.gateway";
+    const serviceTarget = `${domain}/${label}`;
+
+    const disableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "disable" && c[1] === serviceTarget,
+    );
+    const killIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kill" && c[1] === "SIGTERM" && c[2] === serviceTarget,
+    );
+    expect(disableIndex).toBeGreaterThanOrEqual(0);
+    expect(killIndex).toBeGreaterThanOrEqual(0);
+    expect(disableIndex).toBeLessThan(killIndex);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout")).toBe(false);
   });
 });
 
