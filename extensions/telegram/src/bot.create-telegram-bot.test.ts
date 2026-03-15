@@ -191,13 +191,18 @@ describe("createTelegramBot", () => {
     answerCallbackQuerySpy.mockClear();
     nextSpy.mockClear();
 
-    // answerCallbackQuery rejection: still calls next (fire-and-forget)
+    // answerCallbackQuery rejection: still calls next (fire-and-forget) and logs the error
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     answerCallbackQuerySpy.mockRejectedValueOnce(new Error("Telegram 400"));
     await preSeqMiddleware(
       { callbackQuery: { id: "cbq-err" }, answerCallbackQuery: answerCallbackQuerySpy },
       nextSpy,
     );
     expect(nextSpy).toHaveBeenCalledTimes(1);
+    // Allow the fire-and-forget withTelegramApiErrorLogging promise to settle
+    await new Promise((r) => setTimeout(r, 10));
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining("answerCallbackQuery"));
+    consoleErrorSpy.mockRestore();
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });

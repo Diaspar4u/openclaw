@@ -322,11 +322,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   // but answerCallbackQuery is idempotent and Telegram ignores redundant answers.
   bot.use(async (ctx, next) => {
     if (ctx.callbackQuery) {
+      // ctx.answerCallbackQuery is always present when ctx.callbackQuery is truthy in
+      // production grammY contexts — no bot.api fallback needed (the old bot-handlers.ts
+      // guard was defensive against hand-crafted test contexts, not a real runtime path).
       void withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
         fn: () => ctx.answerCallbackQuery(),
-      }).catch(() => {});
+      }).catch(() => {
+        // withTelegramApiErrorLogging has already emitted the failure.
+      });
     }
     await next();
   });
