@@ -362,11 +362,14 @@ export function createStatusReactionController(params: {
 
     await enqueue(async () => {
       if (adapter.clearReactions) {
-        try {
-          await adapter.clearReactions();
-        } catch (err) {
-          if (onError) {
-            onError(err);
+        // Skip the API call when no reaction was ever applied or pending
+        if (currentEmoji || pendingEmoji) {
+          try {
+            await adapter.clearReactions();
+          } catch (err) {
+            if (onError) {
+              onError(err);
+            }
           }
         }
       } else if (adapter.removeReaction) {

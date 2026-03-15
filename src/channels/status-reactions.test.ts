@@ -358,6 +358,41 @@ describe("createStatusReactionController", () => {
     expect(setReaction.mock.calls.length).toBe(callCountAfterClear);
   });
 
+  it("should skip immediately-enqueued emoji changes after clear", async () => {
+    const setReaction = vi.fn(async () => {});
+    const controller = createStatusReactionController({
+      enabled: true,
+      adapter: { setReaction, clearReactions: vi.fn(async () => {}) },
+      initialEmoji: "👀",
+    });
+
+    // Enqueue an immediate emoji — but don't let the chain drain yet
+    void controller.setQueued();
+
+    // Clear wins the race: finished=true before the chain runs
+    await controller.clear();
+
+    // setQueued's enqueued callback should have seen finished=true and returned early
+    expect(setReaction).not.toHaveBeenCalled();
+  });
+
+  it("should skip clearReactions when no reaction was ever applied", async () => {
+    const clearReactions = vi.fn(async () => {});
+    const controller = createStatusReactionController({
+      enabled: true,
+      adapter: {
+        setReaction: vi.fn(async () => {}),
+        clearReactions,
+      },
+      initialEmoji: "👀",
+    });
+
+    // Clear immediately without ever setting a reaction
+    await controller.clear();
+
+    expect(clearReactions).not.toHaveBeenCalled();
+  });
+
   it("should handle clear gracefully when adapter lacks removeReaction", async () => {
     const { calls, controller } = createSetOnlyController();
 
