@@ -87,6 +87,18 @@ function summarizeSeries(values: number[]): {
 
 type GatewayRpcOpts = { url?: string; token?: string; timeout?: string };
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+function parseTimeoutMs(raw?: string): number {
+  const t = Number(raw ?? DEFAULT_TIMEOUT_MS);
+  return Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT_MS;
+}
+
+// NOTE: Voice-call gateway handlers use the 2-arg respond signature
+// (respond(false, { error: "..." })) which puts error info in the payload
+// rather than the protocol error field. GatewayClient surfaces these as
+// "unknown error". unwrapRpcResult compensates by checking result.error
+// on the CLI side. The proper fix belongs in the handler (3-arg respond).
 async function rpc<T = Record<string, unknown>>(
   method: string,
   opts: GatewayRpcOpts,
@@ -98,15 +110,16 @@ async function rpc<T = Record<string, unknown>>(
       token: opts.token,
       method,
       params,
-      timeoutMs: Number(opts.timeout ?? 15_000),
+      timeoutMs: parseTimeoutMs(opts.timeout),
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("ECONNREFUSED") || msg.includes("connect") || msg.includes("timeout")) {
+    if (msg.includes("ECONNREFUSED") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT")) {
       throw new Error(
         `Cannot reach gateway: ${msg}\nIs the gateway running? Start it with: openclaw gateway run`,
+        { cause: err },
       );
     }
     throw err;
@@ -242,9 +255,11 @@ export function registerVoiceCallCli(params: {
       .description("Show call status")
       .requiredOption("--call-id <id>", "Call ID"),
   ).action(async (options: GatewayRpcOpts & { callId: string }) => {
-    const result = await rpc("voicecall.status", options, {
-      callId: options.callId,
-    });
+    const result = unwrapRpcResult(
+      await rpc("voicecall.status", options, {
+        callId: options.callId,
+      }),
+    );
     // eslint-disable-next-line no-console
     console.log(JSON.stringify(result ?? { found: false }, null, 2));
   });
