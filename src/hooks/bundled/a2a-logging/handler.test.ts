@@ -1,26 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInternalHookEvent, type AgentToAgentHookContext } from "../../internal-hooks.js";
 
-// Mock external dependencies before imports
-vi.mock("../../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    hooks: {
-      internal: {
-        entries: {
-          "a2a-logging": {
-            enabled: true,
-            chatId: "-1001234567890",
-            topicId: 12345,
-          },
+const mockConfig = {
+  hooks: {
+    internal: {
+      entries: {
+        "a2a-logging": {
+          enabled: true,
+          chatId: "-1001234567890",
+          topicId: 12345,
         },
       },
     },
-    channels: {
-      telegram: {
-        botToken: "fake-bot-token",
-      },
+  },
+  channels: {
+    telegram: {
+      botToken: "fake-bot-token",
     },
-  })),
+  },
+};
+
+// Mock external dependencies before imports
+vi.mock("../../../config/config.js", () => ({
+  loadConfig: vi.fn(() => mockConfig),
 }));
 
 vi.mock("../../../../extensions/telegram/src/token.js", () => ({

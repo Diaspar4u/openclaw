@@ -8,37 +8,31 @@
 
 import { resolveTelegramFetch } from "../../../../extensions/telegram/src/fetch.js";
 import { resolveTelegramToken } from "../../../../extensions/telegram/src/token.js";
-import { loadConfig } from "../../../config/config.js";
+import { type HookConfig, type OpenClawConfig, loadConfig } from "../../../config/config.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentToAgentEvent, type InternalHookHandler } from "../../internal-hooks.js";
 
 const log = createSubsystemLogger("a2a-logging");
 
+// Warn-once per key: config issues (missing chatId/token) are permanent until
+// gateway restart, so repeating the warning on every event adds noise without
+// actionable value. The set resets naturally on process restart.
 const warningSuppressed = new Set<string>();
 
-export type A2ALoggingConfig = {
-  enabled?: boolean;
-  chatId?: string;
-  topicId?: number;
-  token?: string;
-};
-
-export function resolveA2AConfig(): A2ALoggingConfig | undefined {
-  const cfg = loadConfig();
+export function resolveA2AConfig(cfg: OpenClawConfig): HookConfig | undefined {
   const hookConfig = resolveHookConfig(cfg, "a2a-logging");
   if (!hookConfig || hookConfig.enabled === false) {
     return undefined;
   }
-  return hookConfig as A2ALoggingConfig;
+  return hookConfig;
 }
 
-export function resolveToken(hookToken: string | undefined): string {
+export function resolveToken(cfg: OpenClawConfig, hookToken: string | undefined): string {
   if (hookToken) {
     return hookToken;
   }
   try {
-    const cfg = loadConfig();
     const resolved = resolveTelegramToken(cfg);
     return resolved.token;
   } catch (err) {
@@ -114,12 +108,17 @@ const handler: InternalHookHandler = async (event) => {
   }
 
   try {
-    const config = resolveA2AConfig();
-    if (!config) {
+    const cfg = loadConfig();
+    const hookConfig = resolveA2AConfig(cfg);
+    if (!hookConfig) {
       return;
     }
 
-    const { chatId, topicId } = config;
+    // Validate individual fields from generic HookConfig (session-memory pattern)
+    const chatId = typeof hookConfig.chatId === "string" ? hookConfig.chatId : undefined;
+    const topicId = typeof hookConfig.topicId === "number" ? hookConfig.topicId : undefined;
+    const hookToken = typeof hookConfig.token === "string" ? hookConfig.token : undefined;
+
     if (!chatId) {
       if (!warningSuppressed.has("chatId")) {
         log.warn(
@@ -130,7 +129,7 @@ const handler: InternalHookHandler = async (event) => {
       return;
     }
 
-    const token = resolveToken(config.token);
+    const token = resolveToken(cfg, hookToken);
     if (!token) {
       if (!warningSuppressed.has("token")) {
         log.warn(
