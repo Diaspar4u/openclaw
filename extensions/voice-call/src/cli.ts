@@ -261,7 +261,7 @@ export function registerVoiceCallCli(params: {
       }),
     );
     // eslint-disable-next-line no-console
-    console.log(JSON.stringify(result ?? { found: false }, null, 2));
+    console.log(JSON.stringify(result, null, 2));
   });
 
   root
