@@ -709,13 +709,16 @@ export async function openaiTTSStream(params: {
   baseUrl?: string;
   model: string;
   voice: string;
+  speed?: number;
+  instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<OpenaiTTSStreamResult> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, speed, responseFormat, timeoutMs } = params;
   const effectiveBaseUrl = params.baseUrl?.trim()
     ? normalizeOpenAITtsBaseUrl(params.baseUrl)
     : getOpenAITtsBaseUrl();
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, params.instructions);
 
   if (!isValidOpenAIModel(model, effectiveBaseUrl)) {
     throw new Error(`Invalid model: ${model}`);
@@ -752,6 +755,8 @@ export async function openaiTTSStream(params: {
       input: text,
       voice,
       response_format: responseFormat,
+      ...(speed != null && { speed }),
+      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
     }),
     signal: controller.signal,
   }).catch((err) => {

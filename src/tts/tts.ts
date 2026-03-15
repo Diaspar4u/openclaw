@@ -846,6 +846,8 @@ export async function textToSpeechTelephonyStream(params: {
         baseUrl: config.openai.baseUrl,
         model: config.openai.model,
         voice: config.openai.voice,
+        speed: config.openai.speed,
+        instructions: config.openai.instructions,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
       });
@@ -859,6 +861,15 @@ export async function textToSpeechTelephonyStream(params: {
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
+      // Permanent failures (invalid config, model validation) should not
+      // fall through to the next provider — only transient I/O errors should.
+      const isTransient =
+        err instanceof TypeError ||
+        (err instanceof Error && /ECONNRESET|ETIMEDOUT|ENOTFOUND|AbortError/.test(err.name)) ||
+        (err instanceof Error && /ECONNRESET|ETIMEDOUT|ENOTFOUND/.test(err.message));
+      if (!isTransient) {
+        break;
+      }
     }
   }
 

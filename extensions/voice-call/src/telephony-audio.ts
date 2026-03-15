@@ -1,5 +1,11 @@
 const TELEPHONY_SAMPLE_RATE = 8000;
 
+function assertValidSampleRate(rate: number): void {
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`Invalid sample rate: ${rate} (must be a positive finite number)`);
+  }
+}
+
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
 }
@@ -94,8 +100,9 @@ export function convertPcmChunkToMulaw8k(
   inputSampleRate: number,
   state: PcmToMulawStreamState,
 ): Buffer {
+  assertValidSampleRate(inputSampleRate);
   let pcm: Buffer;
-  // Prepend odd-byte leftover first, then interpolation-deferred samples
+  // Prepend interpolation-deferred samples first, then any odd-byte leftover
   const prefixes: Buffer[] = [];
   if (state.interpLeftover) {
     prefixes.push(state.interpLeftover);
@@ -159,6 +166,11 @@ export function convertPcmChunkToMulaw8k(
   }
 
   if (!brokeForInterp) {
+    // srcPos - inputSamples yields the fractional overshoot into the next chunk.
+    // A carry of 0 when srcPos lands exactly on inputSamples is correct: the next
+    // chunk should start at position 0, matching single-pass resamplePcmTo8k behavior.
+    // No duplicate boundary sample is produced because the while loop exits before
+    // emitting a sample at srcPos == inputSamples.
     state.srcPosCarry = srcPos - inputSamples;
     state.inputSamplesConsumed += inputSamples;
   }
@@ -184,6 +196,7 @@ export function flushPcmToMulawStream(
   state: PcmToMulawStreamState,
   inputSampleRate = TELEPHONY_SAMPLE_RATE,
 ): Buffer {
+  assertValidSampleRate(inputSampleRate);
   const interp = state.interpLeftover;
   state.interpLeftover = null;
   state.leftover = null;

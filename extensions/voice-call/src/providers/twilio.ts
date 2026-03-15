@@ -40,7 +40,7 @@ import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
  * Thrown when TTS streaming fails after audio frames have already been sent.
  * Must NOT fall back to TwiML <Say> (would cause garbled/duplicated audio).
  */
-class PartialPlaybackError extends Error {
+export class PartialPlaybackError extends Error {
   constructor(cause: unknown) {
     super(
       `TTS streaming failed after partial playback: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -644,6 +644,13 @@ export class TwilioProvider implements VoiceCallProvider {
           // Start synthesis inside the queue callback so OpenAI timeout
           // doesn't count queue-wait time behind earlier playback
           const streamResult = await ttsProvider.synthesizeForTelephonyStream!(text);
+          // Check signal after await — it can fire during the HTTP handshake
+          // before the listener below is attached (AbortSignal race).
+          if (signal.aborted) {
+            streamResult.cleanup();
+            aborted = true;
+            return;
+          }
           const state = createPcmToMulawStreamState();
           const onAbort = () => streamResult.stream.destroy();
           signal.addEventListener("abort", onAbort, { once: true });
@@ -707,7 +714,10 @@ export class TwilioProvider implements VoiceCallProvider {
         if (framesEmitted) {
           throw new PartialPlaybackError(err);
         }
-        console.warn("[voice-call] TTS streaming failed, falling back to buffered:", String(err));
+        console.warn(
+          "[voice-call] TTS streaming failed, falling back to buffered:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 
