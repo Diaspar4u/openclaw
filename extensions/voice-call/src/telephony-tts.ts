@@ -43,6 +43,7 @@ export function createTelephonyTtsProvider(params: {
   coreConfig: CoreConfig;
   ttsOverride?: VoiceCallTtsConfig;
   runtime: TelephonyTtsRuntime;
+  prefsPath?: string;
 }): TelephonyTtsProvider {
   const { coreConfig, ttsOverride, runtime } = params;
   const mergedConfig = applyTtsOverride(coreConfig, ttsOverride);
@@ -52,6 +53,7 @@ export function createTelephonyTtsProvider(params: {
       const result = await runtime.textToSpeechTelephony({
         text,
         cfg: mergedConfig,
+        prefsPath: params.prefsPath,
       });
 
       if (!result.success || !result.audioBuffer || !result.sampleRate) {
@@ -68,6 +70,7 @@ export function createTelephonyTtsProvider(params: {
       const result = await streamFn({
         text,
         cfg: mergedConfig,
+        prefsPath: params.prefsPath,
       });
 
       if (!result.success || !result.stream || !result.sampleRate) {

@@ -95,7 +95,8 @@ export function convertPcmChunkToMulaw8k(
   state: PcmToMulawStreamState,
 ): Buffer {
   let pcm: Buffer;
-  // Prepend odd-byte leftover first, then interpolation-deferred samples
+  // Prepend interpolation-deferred samples first (earlier in the audio stream),
+  // then odd-byte leftover, then the new chunk: [interpLeftover, leftover, chunk]
   const prefixes: Buffer[] = [];
   if (state.interpLeftover) {
     prefixes.push(state.interpLeftover);

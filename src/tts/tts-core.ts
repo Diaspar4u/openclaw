@@ -709,10 +709,13 @@ export async function openaiTTSStream(params: {
   baseUrl?: string;
   model: string;
   voice: string;
+  speed?: number;
+  instructions?: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
 }): Promise<OpenaiTTSStreamResult> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, speed, instructions, responseFormat, timeoutMs } = params;
+  const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions);
   const effectiveBaseUrl = params.baseUrl?.trim()
     ? normalizeOpenAITtsBaseUrl(params.baseUrl)
     : getOpenAITtsBaseUrl();
@@ -752,6 +755,8 @@ export async function openaiTTSStream(params: {
       input: text,
       voice,
       response_format: responseFormat,
+      ...(speed != null && { speed }),
+      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
     }),
     signal: controller.signal,
   }).catch((err) => {
@@ -801,6 +806,7 @@ export async function openaiTTSStream(params: {
   stream.on("error", (err) => watchdogTransform.destroy(err));
   watchdogTransform.on("end", cleanup);
   watchdogTransform.on("error", cleanup);
+  watchdogTransform.on("close", cleanup);
 
   return { stream: watchdogTransform, cleanup };
 }

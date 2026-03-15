@@ -644,6 +644,13 @@ export class TwilioProvider implements VoiceCallProvider {
           // Start synthesis inside the queue callback so OpenAI timeout
           // doesn't count queue-wait time behind earlier playback
           const streamResult = await ttsProvider.synthesizeForTelephonyStream!(text);
+          // Check signal after await — abort may have fired during the HTTP
+          // round-trip, and the listener below would never see a past event.
+          if (signal.aborted) {
+            streamResult.cleanup();
+            aborted = true;
+            return;
+          }
           const state = createPcmToMulawStreamState();
           const onAbort = () => streamResult.stream.destroy();
           signal.addEventListener("abort", onAbort, { once: true });
@@ -707,7 +714,10 @@ export class TwilioProvider implements VoiceCallProvider {
         if (framesEmitted) {
           throw new PartialPlaybackError(err);
         }
-        console.warn("[voice-call] TTS streaming failed, falling back to buffered:", String(err));
+        console.warn(
+          "[voice-call] TTS streaming failed, falling back to buffered:",
+          err instanceof Error ? err.message : String(err),
+        );
       }
     }
 

@@ -848,6 +848,8 @@ export async function textToSpeechTelephonyStream(params: {
         baseUrl: config.openai.baseUrl,
         model: config.openai.model,
         voice: config.openai.voice,
+        speed: config.openai.speed,
+        instructions: config.openai.instructions,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
       });
