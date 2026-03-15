@@ -454,7 +454,10 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   const serviceTarget = `${domain}/${label}`;
   // Disable the service so KeepAlive doesn't restart it, then kill the process.
   // Unlike bootout, this keeps the service loaded so restart/start work without re-install.
-  await execLaunchctl(["disable", serviceTarget]);
+  const disableRes = await execLaunchctl(["disable", serviceTarget]);
+  if (disableRes.code !== 0 && !isLaunchctlNotLoaded(disableRes)) {
+    throw new Error(`launchctl disable failed: ${disableRes.stderr || disableRes.stdout}`.trim());
+  }
   const res = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());

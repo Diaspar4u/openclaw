@@ -477,7 +477,7 @@ describe("launchd stop", () => {
 
     await stopLaunchAgent({ env, stdout });
 
-    const domain = `gui/${process.getuid!()}`;
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
     const label = "ai.openclaw.gateway";
     const serviceTarget = `${domain}/${label}`;
 
