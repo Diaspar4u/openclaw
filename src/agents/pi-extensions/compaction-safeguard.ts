@@ -1028,8 +1028,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         effectivePrior && effectivePrior.length > MAX_EMERGENCY_PRIOR_SUMMARY_CHARS
           ? effectivePrior.slice(0, MAX_EMERGENCY_PRIOR_SUMMARY_CHARS) + "\n[…truncated]"
           : effectivePrior;
-      const priorContext = clampedPrior
-        ? `\n\nPrior summary (carried forward):\n${clampedPrior}`
+      // Sanitize prior summary before embedding in LLM context — it originates from
+      // LLM output (droppedSummary) or external input (previousSummary), same as rawErrorMessage above.
+      const sanitizedPrior = clampedPrior ? sanitizeForPromptLiteral(clampedPrior) : clampedPrior;
+      const priorContext = sanitizedPrior
+        ? `\n\nPrior summary (carried forward):\n${sanitizedPrior}`
         : "";
       const splitTurnNote =
         preparation.isSplitTurn && preparation.turnPrefixMessages?.length
@@ -1039,8 +1042,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let workspaceCtx = "";
       try {
         workspaceCtx = await readWorkspaceContextForSummary();
-      } catch {
-        // best-effort; don't let this block the emergency return
+      } catch (wsError) {
+        // best-effort; don't let workspace read failure block the emergency return
+        log.warn(
+          `Emergency fallback: failed to read workspace context: ${
+            wsError instanceof Error ? wsError.message : String(wsError)
+          }`,
+        );
       }
       // Intentionally lossy: when LLM summarization fails, we preserve whatever
       // structured context we can extract (prior summary, recent turns, tool
