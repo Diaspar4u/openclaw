@@ -48,7 +48,7 @@ export async function generateVoiceResponse(
   const normalizedPhone = from.replace(/\D/g, "");
   const sessionKey = `voice:${normalizedPhone}`;
   // No existence validation — consistent with core (agentId refs are not validated at config time)
-  const agentId = voiceConfig.responseAgentId?.trim() || "main";
+  const agentId = voiceConfig.responseAgentId ?? "main";
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
