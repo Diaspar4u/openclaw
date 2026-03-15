@@ -1287,7 +1287,8 @@ export function listSessionsFromStore(params: {
       sessions = sessions
         .filter((s) => !includeKeys.has(s.key))
         .slice(0, limit)
-        .concat(pinned);
+        .concat(pinned)
+        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
     } else {
       sessions = sessions.slice(0, limit);
     }

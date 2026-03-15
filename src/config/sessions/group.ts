@@ -38,12 +38,9 @@ export function buildGroupDisplayName(params: {
   const topicName = params.topicName?.trim();
 
   // Telegram: preserve casing, use subject : topic format
-  if (isTelegram && subject) {
-    const base = subject;
-    if (topicName) {
-      return `${providerKey} : ${base} : ${topicName}`;
-    }
-    return `${providerKey} : ${base}`;
+  if (isTelegram) {
+    const parts = [providerKey, subject, topicName].filter(Boolean);
+    return parts.join(" : ");
   }
 
   const detail =
