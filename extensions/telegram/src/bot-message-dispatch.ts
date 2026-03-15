@@ -824,6 +824,9 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
+  // deliverySummary.delivered covers block-streamed sends that bypass queuedFinal
+  // (e.g. deliver() called during dispatch but no final reply queued). These are
+  // real sendPayload/deliverReplies calls — not transient draft previews.
   const hasFinalResponse = queuedFinal || sentFallback || deliverySummary.delivered;
 
   if (statusReactionController && !hasFinalResponse) {

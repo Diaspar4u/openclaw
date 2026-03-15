@@ -193,11 +193,8 @@ describe("dispatchTelegramMessage ack reaction removal", () => {
       opts: { token: "token" },
     });
 
-    // Wait for the fire-and-forget promise chain inside removeAckReactionAfterReply
-    await new Promise((r) => setTimeout(r, 10));
-
-    // reactionApi should be called with empty array to clear the reaction
-    expect(reactionApi).toHaveBeenCalledWith(7, 99, []);
+    // Drain the fire-and-forget promise chain inside removeAckReactionAfterReply
+    await vi.waitFor(() => expect(reactionApi).toHaveBeenCalledWith(7, 99, []));
   });
 
   it("does not remove ack reaction when nothing was delivered", async () => {
@@ -228,7 +225,9 @@ describe("dispatchTelegramMessage ack reaction removal", () => {
       opts: { token: "token" },
     });
 
-    await new Promise((r) => setTimeout(r, 10));
+    // Flush microtasks to ensure the promise chain inside removeAckReactionAfterReply settles
+    await Promise.resolve();
+    await Promise.resolve();
 
     expect(reactionApi).not.toHaveBeenCalled();
   });
