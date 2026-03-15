@@ -379,7 +379,8 @@ function emitA2AHookEvent(
   }
   const sourceAgentId = resolveAgentIdFromSessionKey(sourceSessionKey);
   const targetAgentId = resolveAgentIdFromSessionKey(resolvedTargetKey);
-  if (sourceAgentId && targetAgentId && sourceAgentId !== targetAgentId) {
+  // resolveAgentIdFromSessionKey always returns a non-empty string (falls back to "main")
+  if (sourceAgentId !== targetAgentId) {
     void triggerInternalHook(
       createInternalHookEvent("agent_to_agent", "send", sourceSessionKey, {
         sourceSessionKey,

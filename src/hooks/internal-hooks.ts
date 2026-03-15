@@ -458,7 +458,9 @@ export function isAgentToAgentEvent(event: InternalHookEvent): event is AgentToA
     return false;
   }
   return (
+    hasStringContextField(context, "sourceSessionKey") &&
     hasStringContextField(context, "sourceAgentId") &&
+    hasStringContextField(context, "targetSessionKey") &&
     hasStringContextField(context, "targetAgentId") &&
     hasStringContextField(context, "message")
   );

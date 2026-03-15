@@ -25,8 +25,14 @@ vi.mock("../../../config/config.js", () => ({
   loadConfig: vi.fn(() => mockConfig),
 }));
 
+let mockTokenBehavior: "success" | "throw" = "success";
 vi.mock("../../../../extensions/telegram/src/token.js", () => ({
-  resolveTelegramToken: vi.fn(() => ({ token: "fake-bot-token", source: "config" })),
+  resolveTelegramToken: vi.fn(() => {
+    if (mockTokenBehavior === "throw") {
+      throw new Error("no token configured");
+    }
+    return { token: "fake-bot-token", source: "config" };
+  }),
 }));
 
 const mockTelegramFetch = vi.fn(() =>
@@ -49,6 +55,11 @@ vi.mock("../../../logging/subsystem.js", () => ({
 }));
 
 describe("a2a-logging handler", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    mockTokenBehavior = "success";
+  });
+
   describe("formatA2ALogMessage", () => {
     it("should format message with agent IDs and UTC timestamp", async () => {
       const { formatA2ALogMessage } = await import("./handler.js");
@@ -193,6 +204,55 @@ describe("a2a-logging handler", () => {
       };
       const event = createInternalHookEvent("agent_to_agent", "send", "agent:a:main", context);
       await expect(handler(event)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("warning-suppression paths", () => {
+    beforeEach(() => {
+      mockTelegramFetch.mockClear();
+    });
+
+    it("should skip and warn once when chatId is missing", async () => {
+      const saved = mockConfig.hooks.internal.entries["a2a-logging"].chatId;
+      mockConfig.hooks.internal.entries["a2a-logging"].chatId = undefined as unknown as string;
+      try {
+        const { default: handler } = await import("./handler.js");
+        const context: AgentToAgentHookContext = {
+          sourceSessionKey: "agent:a:main",
+          sourceAgentId: "a",
+          targetSessionKey: "agent:b:main",
+          targetAgentId: "b",
+          message: "test",
+        };
+        const event = createInternalHookEvent("agent_to_agent", "send", "agent:a:main", context);
+        await handler(event);
+        await handler(event);
+
+        expect(mockTelegramFetch).not.toHaveBeenCalled();
+      } finally {
+        mockConfig.hooks.internal.entries["a2a-logging"].chatId = saved;
+      }
+    });
+
+    it("should skip and warn once when token is missing", async () => {
+      mockTokenBehavior = "throw";
+      try {
+        const { default: handler } = await import("./handler.js");
+        const context: AgentToAgentHookContext = {
+          sourceSessionKey: "agent:a:main",
+          sourceAgentId: "a",
+          targetSessionKey: "agent:b:main",
+          targetAgentId: "b",
+          message: "test",
+        };
+        const event = createInternalHookEvent("agent_to_agent", "send", "agent:a:main", context);
+        await handler(event);
+        await handler(event);
+
+        expect(mockTelegramFetch).not.toHaveBeenCalled();
+      } finally {
+        mockTokenBehavior = "success";
+      }
     });
   });
 });
