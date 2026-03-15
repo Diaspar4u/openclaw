@@ -8,7 +8,10 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import {
+  INDEFINITE_DRAIN_MAX_WAIT_MS,
+  scheduleGatewaySigusr1Restart,
+} from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -138,7 +141,7 @@ export function createGatewayTool(opts?: {
           delayMs,
           reason,
           force,
-          maxWaitMs: 0,
+          maxWaitMs: INDEFINITE_DRAIN_MAX_WAIT_MS,
         });
         return jsonResult(scheduled);
       }
