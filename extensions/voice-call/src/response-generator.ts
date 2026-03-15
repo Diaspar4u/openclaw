@@ -48,7 +48,7 @@ export async function generateVoiceResponse(
   const normalizedPhone = from.replace(/\D/g, "");
   const sessionKey = `voice:${normalizedPhone}`;
   // No existence validation — consistent with core (agentId refs are not validated at config time)
-  const agentId = voiceConfig.responseAgentId || "main";
+  const agentId = voiceConfig.responseAgentId?.trim() || "main";
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
@@ -145,6 +145,6 @@ export async function generateVoiceResponse(
     return { text };
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
-    return { text: null, error: String(err) };
+    return { text: null, error: err instanceof Error ? err.message : String(err) };
   }
 }
