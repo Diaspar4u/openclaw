@@ -211,7 +211,7 @@ describe("shared-bootstrap hook", () => {
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
     await handler(event);
 
-    // Symlink escaping the shared dir is rejected by openBoundaryFile
+    // Symlink filtered out by dirent.isFile() (returns false for symlinks)
     expect(context.bootstrapFiles).toHaveLength(1);
     expect(context.bootstrapFiles[0].name).toBe("SHARED_LEGIT.md");
   });
@@ -291,12 +291,15 @@ describe("shared-bootstrap hook", () => {
     });
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
-    await handler(event);
 
-    expect(context.bootstrapFiles).toHaveLength(1);
-    expect(context.bootstrapFiles[0].name).toBe("SHARED_GOOD.md");
+    try {
+      await handler(event);
 
-    vi.restoreAllMocks();
+      expect(context.bootstrapFiles).toHaveLength(1);
+      expect(context.bootstrapFiles[0].name).toBe("SHARED_GOOD.md");
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("shared files survive in subagent sessions", async () => {
