@@ -1,5 +1,6 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
+import { hasErrnoCode } from "../infra/errors.js";
 
 export type RegularFileStatResult = { missing: true } | { missing: false; stat: Stats };
 
@@ -20,6 +21,11 @@ export async function statRegularFile(absPath: string): Promise<RegularFileStatR
     stat = await fs.stat(absPath);
   } catch (err) {
     if (isFileMissingError(err)) {
+      return { missing: true };
+    }
+    // ELOOP (circular symlink) and ENOTDIR (path component not a directory)
+    // mean the target is effectively unreachable — treat as missing.
+    if (hasErrnoCode(err, "ELOOP") || hasErrnoCode(err, "ENOTDIR")) {
       return { missing: true };
     }
     throw err;

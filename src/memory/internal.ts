@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errors.js";
 import { detectMime } from "../media/mime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -101,8 +102,19 @@ async function walkDir(
   let realDir: string;
   try {
     realDir = await fs.realpath(dir);
-  } catch {
-    return; // Broken symlink or inaccessible
+  } catch (err) {
+    // Broken symlink (ENOENT), circular symlink (ELOOP), permission denied (EACCES/EPERM),
+    // or path component not a directory (ENOTDIR) — skip silently.
+    if (
+      isFileMissingError(err) ||
+      hasErrnoCode(err, "ELOOP") ||
+      hasErrnoCode(err, "ENOTDIR") ||
+      hasErrnoCode(err, "EACCES") ||
+      hasErrnoCode(err, "EPERM")
+    ) {
+      return;
+    }
+    throw err;
   }
   if (seen.has(realDir)) {
     return; // Cycle detected — prevent infinite recursion
@@ -119,8 +131,19 @@ async function walkDir(
         } else if (targetStat.isFile() && isAllowedMemoryFilePath(full, multimodal)) {
           files.push(full);
         }
-      } catch {
-        // Skip broken symlinks, circular symlinks (ELOOP), and permission errors
+      } catch (err) {
+        // Skip broken symlinks (ENOENT), circular symlinks (ELOOP),
+        // path-component conflicts (ENOTDIR), and permission errors (EPERM/EACCES).
+        // Re-throw unexpected errors (e.g. ENOSPC, readdir failures from recursive walkDir).
+        if (
+          !isFileMissingError(err) &&
+          !hasErrnoCode(err, "ELOOP") &&
+          !hasErrnoCode(err, "ENOTDIR") &&
+          !hasErrnoCode(err, "EPERM") &&
+          !hasErrnoCode(err, "EACCES")
+        ) {
+          throw err;
+        }
       }
       continue;
     }

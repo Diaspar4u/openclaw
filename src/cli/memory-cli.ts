@@ -205,7 +205,9 @@ async function scanMemoryFiles(
   for (const extraPath of resolvedExtraPaths) {
     try {
       const extraCheck = await checkReadableFile(extraPath);
-      if (extraCheck.issue) {
+      if (!extraCheck.exists) {
+        issues.push(`additional memory path missing (${shortenHomePath(extraPath)})`);
+      } else if (extraCheck.issue) {
         issues.push(extraCheck.issue);
       }
     } catch (err) {
