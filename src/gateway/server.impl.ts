@@ -429,6 +429,8 @@ export async function startGatewayServer(
   // Auto-migrate session store from monolithic JSON to directory-per-session layout.
   // Scans all agent directories on disk so sub-agents and ephemeral agents are covered.
   // Also handles any custom session.store config path that may differ from disk-scanned defaults.
+  // Sequential by design: each migration renames files atomically, and typical installs have
+  // only 1-3 agents. Parallelizing would add complexity for negligible real-world gain.
   if (!minimalTestGateway) {
     const sessionDirs = await listAgentSessionDirs(STATE_DIR);
     for (const sessionsDir of sessionDirs) {

@@ -1193,7 +1193,10 @@ export async function updateSessionStoreEntry(params: {
   // preventing lost-update races on the same session entry.
   return await withSessionStoreLock(storePath, async () => {
     const useDirectory = isDirectoryStore(storePath);
-    // Full store load required: legacy key case-insensitive dedup needs a full scan.
+    // Full store load required: resolveSessionStoreEntry performs case-insensitive dedup
+    // across legacy keys, which needs visibility into all entries. Once the legacy migration
+    // window closes (no more case-variant keys on disk), this can be replaced with a
+    // single-entry read. The lock serializes writes, so the scan is not a concurrency bottleneck.
     const store = loadSessionStore(storePath, { skipCache: true });
     const previousSnapshot = useDirectory ? structuredClone(store) : undefined;
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
