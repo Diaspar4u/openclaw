@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "./errors.js";
+import { writeTextAtomic } from "./json-files.js";
 
 const QUEUE_DIRNAME = "webhook-queue";
 const MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
@@ -26,10 +28,6 @@ function entryFilename(channelId: string, deduplicationId: string): string {
   return `${safeFileKey(channelId)}_${safeFileKey(deduplicationId)}.json`;
 }
 
-async function ensureQueueDir(queueDir: string): Promise<void> {
-  await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
-}
-
 /**
  * Persist an inbound webhook payload to disk before acknowledging receipt.
  * Write failure must NOT block normal processing — callers should catch errors.
@@ -41,7 +39,6 @@ export async function enqueueWebhook(
   stateDir?: string,
 ): Promise<void> {
   const queueDir = resolveQueueDir(stateDir);
-  await ensureQueueDir(queueDir);
   const entry: WebhookQueueEntry = {
     channelId,
     deduplicationId,
@@ -49,9 +46,10 @@ export async function enqueueWebhook(
     payload,
   };
   const filePath = path.join(queueDir, entryFilename(channelId, deduplicationId));
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry), { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
+  await writeTextAtomic(filePath, JSON.stringify(entry), {
+    mode: 0o600,
+    ensureDirMode: 0o700,
+  });
 }
 
 /** Remove a processed webhook entry from the queue. */
@@ -64,12 +62,7 @@ export async function dequeueWebhook(
   try {
     await fs.promises.unlink(filePath);
   } catch (err) {
-    if (
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: string }).code === "ENOENT"
-    ) {
+    if (hasErrnoCode(err, "ENOENT")) {
       return; // Already removed — no-op.
     }
     throw err;
@@ -89,15 +82,10 @@ export async function replayPendingWebhooks(
   try {
     files = await fs.promises.readdir(queueDir);
   } catch (err) {
-    if (
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: string }).code !== "ENOENT"
-    ) {
-      console.warn("[webhook-queue] failed to read queue directory:", err);
+    if (hasErrnoCode(err, "ENOENT")) {
+      return [];
     }
-    return [];
+    throw err;
   }
 
   const now = Date.now();

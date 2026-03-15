@@ -152,20 +152,25 @@ export async function startTelegramWebhook(opts: {
   });
 
   // Replay any webhook payloads that were enqueued but not fully processed
-  // before the last shutdown.
+  // before the last shutdown. Dispatch concurrently so timer-based middleware
+  // (media-group flush, text-fragment coalescing) can batch related updates.
   const pending = await replayPendingWebhooks(queueChannelId, opts.stateDir);
-  for (const entry of pending) {
-    try {
-      await bot.handleUpdate(entry.payload as Parameters<typeof bot.handleUpdate>[0]);
-      // Dequeue happens via onUpdateProcessed in the bot middleware on success.
-    } catch (err) {
-      runtime.log?.(
-        `webhook replay failed for update ${entry.deduplicationId}: ${formatErrorMessage(err)}`,
-      );
-      // Leave entry on disk — will be retried on next restart (1h TTL cleanup).
-    }
-  }
   if (pending.length > 0) {
+    const results = await Promise.allSettled(
+      pending.map((entry) =>
+        bot.handleUpdate(entry.payload as Parameters<typeof bot.handleUpdate>[0]),
+      ),
+    );
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") {
+        runtime.log?.(
+          `webhook replay failed for update ${pending[i].deduplicationId}: ${formatErrorMessage(result.reason)}`,
+        );
+        // Leave entry on disk — will be retried on next restart (1h TTL cleanup).
+      }
+      // Dequeue for fulfilled entries happens via onUpdateProcessed in the bot middleware.
+    }
     runtime.log?.(`webhook queue: replayed ${pending.length} pending update(s)`);
   }
 
@@ -266,8 +271,11 @@ export async function startTelegramWebhook(opts: {
       if (typeof updateId === "number") {
         try {
           await enqueueWebhook(queueChannelId, String(updateId), body.value, opts.stateDir);
-        } catch {
-          // Queue write failure must not block normal processing.
+        } catch (err) {
+          // Queue write failure must not block normal processing, but should be observable.
+          runtime.log?.(
+            `[webhook-queue] enqueue failed for update ${String(updateId)}: ${formatErrorMessage(err)}`,
+          );
         }
       }
 

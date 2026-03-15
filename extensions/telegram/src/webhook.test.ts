@@ -11,11 +11,13 @@ const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
 const initSpy = vi.hoisted(() => vi.fn(async () => undefined));
 const stopSpy = vi.hoisted(() => vi.fn());
 const webhookCallbackSpy = vi.hoisted(() => vi.fn(() => handlerSpy));
+const handleUpdateSpy = vi.hoisted(() => vi.fn(async () => undefined));
 const createTelegramBotSpy = vi.hoisted(() =>
   vi.fn(() => ({
     init: initSpy,
     api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
     stop: stopSpy,
+    handleUpdate: handleUpdateSpy,
   })),
 );
 
@@ -711,6 +713,7 @@ describe("startTelegramWebhook", () => {
         init: initSpy,
         api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
         stop: stopSpy,
+        handleUpdate: handleUpdateSpy,
       };
     });
 
