@@ -442,6 +442,8 @@ export async function startGatewayServer(
       }
     }
     // Fallback: migrate a custom session.store config path (may resolve outside the default agent dirs).
+    // Note: custom templates with {agentId} resolve to "main" here, but non-main agents under
+    // STATE_DIR are already covered by the listAgentSessionDirs scan above.
     if (configSnapshot.config.session?.store) {
       try {
         const configStorePath = resolveStorePath(configSnapshot.config.session.store);

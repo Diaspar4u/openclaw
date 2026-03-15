@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
@@ -84,8 +83,14 @@ export function desanitizeSessionKey(fileName: string): string {
 function isDirectoryStore(storePath: string): boolean {
   try {
     return fs.statSync(resolveSessionStoreDir(storePath)).isDirectory();
-  } catch {
-    return false;
+  } catch (err) {
+    // Only treat "not found" as "no directory store"; surface permission/IO errors
+    // so callers don't silently fall back to legacy JSON mode.
+    const code = getErrorCode(err);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw err;
   }
 }
 
@@ -102,8 +107,20 @@ function loadSessionEntryFromDir(storeDir: string, fileName: string): SessionEnt
       return parsed as SessionEntry;
     }
     return null;
-  } catch {
-    return null;
+  } catch (err) {
+    // ENOENT/ENOTDIR: file vanished between readdir and read — expected race.
+    // SyntaxError: malformed JSON — skip entry with warning.
+    const code = getErrorCode(err);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return null;
+    }
+    if (err instanceof SyntaxError) {
+      log.warn(`loadSessionEntryFromDir: malformed JSON in ${fileName}`, {
+        error: err.message,
+      });
+      return null;
+    }
+    throw err;
   }
 }
 
@@ -113,8 +130,12 @@ function loadSessionStoreFromDir(storeDir: string): Record<string, SessionEntry>
   let entries: string[];
   try {
     entries = fs.readdirSync(storeDir);
-  } catch {
-    return store;
+  } catch (err) {
+    const code = getErrorCode(err);
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return store;
+    }
+    throw err;
   }
   for (const fileName of entries) {
     if (!fileName.endsWith(".json") || fileName.startsWith(".")) {
@@ -138,34 +159,7 @@ async function writeSessionEntryToDir(
   const fileName = `${sanitizeSessionKey(sessionKey)}.json`;
   const filePath = path.join(storeDir, fileName);
   const json = JSON.stringify(entry, null, 2);
-  const tmp = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await fs.promises.mkdir(storeDir, { recursive: true });
-  try {
-    await fs.promises.writeFile(tmp, json, { mode: 0o600, encoding: "utf-8" });
-    await fs.promises.rename(tmp, filePath);
-    if (process.platform !== "win32") {
-      await fs.promises.chmod(filePath, 0o600).catch(() => undefined);
-    }
-  } catch (err) {
-    if (getErrorCode(err) === "ENOENT") {
-      // Parent dir may have been removed (e.g. in tests). Best-effort atomic retry.
-      let retryTmp: string | undefined;
-      try {
-        await fs.promises.mkdir(storeDir, { recursive: true });
-        retryTmp = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-        await fs.promises.writeFile(retryTmp, json, { mode: 0o600, encoding: "utf-8" });
-        await fs.promises.rename(retryTmp, filePath);
-      } catch {
-        if (retryTmp) {
-          await fs.promises.rm(retryTmp, { force: true }).catch(() => undefined);
-        }
-      }
-      return;
-    }
-    throw err;
-  } finally {
-    await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
-  }
+  await writeTextAtomic(filePath, json, { mode: 0o600 });
 }
 
 /** Delete a single session entry from the directory store. */
@@ -173,8 +167,8 @@ async function deleteSessionEntryFromDir(storeDir: string, sessionKey: string): 
   const fileName = `${sanitizeSessionKey(sessionKey)}.json`;
   try {
     await fs.promises.unlink(path.join(storeDir, fileName));
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+  } catch (err) {
+    if (getErrorCode(err) !== "ENOENT") {
       throw err;
     }
   }
@@ -213,8 +207,17 @@ export async function migrateSessionStoreToDirectory(storePath: string): Promise
     let legacyExists = false;
     try {
       legacyExists = fs.statSync(storePath).isFile();
-    } catch {
-      // No legacy file — nothing to migrate
+    } catch (err) {
+      const code = getErrorCode(err);
+      if (code !== "ENOENT") {
+        log.warn(
+          "migrateSessionStoreToDirectory: could not stat legacy store, skipping migration",
+          {
+            storePath,
+            error: String(err),
+          },
+        );
+      }
     }
     if (!legacyExists) {
       return false;
@@ -230,8 +233,18 @@ export async function migrateSessionStoreToDirectory(storePath: string): Promise
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         store = parsed as Record<string, SessionEntry>;
       }
-    } catch {
-      return false;
+    } catch (err) {
+      // ENOENT: file disappeared between statSync and readFileSync — race, not an error.
+      // SyntaxError: malformed JSON — nothing to migrate.
+      const code = getErrorCode(err);
+      if (code === "ENOENT" || err instanceof SyntaxError) {
+        return false;
+      }
+      log.warn("migrateSessionStoreToDirectory: failed to read legacy sessions.json", {
+        storePath,
+        error: String(err),
+      });
+      throw err;
     }
 
     const keys = Object.keys(store);
@@ -302,8 +315,16 @@ export async function migrateSessionStoreToDirectory(storePath: string): Promise
     try {
       await fs.promises.rename(storePath, backupPath);
       log.info("backed up legacy sessions.json", { backupPath: path.basename(backupPath) });
-    } catch {
-      // If rename fails, directory store takes precedence anyway.
+    } catch (err) {
+      // Directory store is active and takes precedence, but warn so operators
+      // know the legacy file remains and can trigger repeat merge migrations.
+      log.warn(
+        "failed to back up legacy sessions.json; directory store is active but JSON file remains",
+        {
+          storePath,
+          error: String(err),
+        },
+      );
     }
     return true;
   });
@@ -903,8 +924,12 @@ async function writeSessionStoreDir(
           existingFiles.add(f);
         }
       }
-    } catch {
-      // Directory may not exist yet
+    } catch (err) {
+      // ENOENT/ENOTDIR: directory not yet created — will be created by writeSessionEntryToDir.
+      const code = getErrorCode(err);
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        log.warn(`writeSessionStoreDir: failed to list existing files`, { error: String(err) });
+      }
     }
 
     const currentFiles = new Set<string>();
