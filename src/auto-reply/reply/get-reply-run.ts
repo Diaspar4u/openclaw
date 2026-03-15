@@ -293,6 +293,8 @@ export async function runPreparedReply(
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
   if (isBareSessionReset && cfg.session?.suppressBareResetGreeting) {
+    // Intentionally exits before sendResetSessionNotice (line ~417): the config
+    // option suppresses ALL bare-reset output, including the operator notice.
     typing.cleanup();
     return undefined;
   }

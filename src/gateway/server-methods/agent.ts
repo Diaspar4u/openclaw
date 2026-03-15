@@ -392,11 +392,50 @@ export const agentHandlers: GatewayRequestHandlers = {
       const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
       if (postResetMessage) {
         message = postResetMessage;
-      } else if (cfg.session?.suppressBareResetGreeting) {
-        // Greeting suppressed — reset done, no LLM call needed.
-        respond(true, { reset: true, sessionKey: requestedSessionKey });
-        return;
-      } else {
+      } else if (requestedSessionKey) {
+        // Resolve per-agent config before the suppression check so agent-level
+        // overrides of suppressBareResetGreeting are respected.
+        const resetSessionKey = requestedSessionKey;
+        const sessionLoad = loadSessionEntry(resetSessionKey);
+        const cfgResolved = sessionLoad.cfg ?? cfg;
+        if (cfgResolved.session?.suppressBareResetGreeting) {
+          // Greeting suppressed — reset done, no LLM call needed.
+          // Bump session updatedAt so pruning logic sees the reset.
+          if (sessionLoad.storePath) {
+            await updateSessionStore(sessionLoad.storePath, (store) => {
+              const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+                cfg: cfgResolved,
+                key: resetSessionKey,
+                store,
+              });
+              const existing = store[primaryKey];
+              if (existing) {
+                existing.updatedAt = Date.now();
+                store[primaryKey] = existing;
+              }
+            });
+          }
+          const accepted = {
+            runId: idem,
+            status: "accepted" as const,
+            acceptedAt: Date.now(),
+            reset: true,
+            sessionKey: requestedSessionKey,
+          };
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `agent:${idem}`,
+            entry: {
+              ts: Date.now(),
+              ok: true,
+              payload: accepted,
+            },
+          });
+          respond(true, accepted, undefined, { runId: idem });
+          return;
+        }
+      }
+      if (!postResetMessage) {
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
         // Date is embedded in the prompt so agents read the correct daily
