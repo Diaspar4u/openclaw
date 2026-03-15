@@ -35,3 +35,4 @@ echo "# Shared Rules" > ~/.openclaw/shared/SHARED_RULES.md
 - If the directory exists but is unreadable, the error propagates to the hook runner (logged, does not block bootstrap).
 - If a matching file exists but cannot be read, it is skipped with a warning.
 - No subagent filtering — shared files appear in every session type.
+- No context-mode filtering — shared files are injected even in lightweight cron/default runs where other bootstrap files are suppressed. This is intentional: shared files contain cross-cutting rules that must be present in every run regardless of context budget.

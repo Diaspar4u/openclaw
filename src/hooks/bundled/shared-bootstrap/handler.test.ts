@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -231,6 +232,71 @@ describe("shared-bootstrap hook", () => {
     expect(context.bootstrapFiles).toHaveLength(1);
     expect(context.bootstrapFiles[0].name).toBe("SHARED_EMPTY.md");
     expect(context.bootstrapFiles[0].content).toBe("");
+  });
+
+  it("does nothing when shared path is a regular file (ENOTDIR)", async () => {
+    await fs.writeFile(path.join(tempDir, "shared"), "not a directory", "utf-8");
+
+    const context = createBootstrapContext({
+      workspaceDir: tempDir,
+      sessionKey: "agent:main:main",
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    expect(context.bootstrapFiles).toHaveLength(0);
+  });
+
+  it("ignores directory entries matching SHARED_*.md pattern", async () => {
+    const sharedDir = path.join(tempDir, "shared");
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.mkdir(path.join(sharedDir, "SHARED_DIR.md"), { recursive: true });
+    await fs.writeFile(path.join(sharedDir, "SHARED_LEGIT.md"), "legit", "utf-8");
+
+    const context = createBootstrapContext({
+      workspaceDir: tempDir,
+      sessionKey: "agent:main:main",
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    expect(context.bootstrapFiles).toHaveLength(1);
+    expect(context.bootstrapFiles[0].name).toBe("SHARED_LEGIT.md");
+  });
+
+  it("skips files when readFileSync throws after successful open", async () => {
+    const sharedDir = path.join(tempDir, "shared");
+    await fs.mkdir(sharedDir, { recursive: true });
+    await fs.writeFile(path.join(sharedDir, "SHARED_FAIL.md"), "fail", "utf-8");
+    await fs.writeFile(path.join(sharedDir, "SHARED_GOOD.md"), "good", "utf-8");
+
+    let readAttempt = 0;
+    const origReadFileSync = syncFs.readFileSync.bind(syncFs);
+    vi.spyOn(syncFs, "readFileSync").mockImplementation(((fd: number, encoding: BufferEncoding) => {
+      readAttempt++;
+      if (readAttempt === 1) {
+        // Simulate hardware read error on first file (SHARED_FAIL sorts before SHARED_GOOD)
+        const err = new Error("Input/output error") as NodeJS.ErrnoException;
+        err.code = "EIO";
+        throw err;
+      }
+      return origReadFileSync(fd, encoding);
+    }) as typeof syncFs.readFileSync);
+
+    const context = createBootstrapContext({
+      workspaceDir: tempDir,
+      sessionKey: "agent:main:main",
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    expect(context.bootstrapFiles).toHaveLength(1);
+    expect(context.bootstrapFiles[0].name).toBe("SHARED_GOOD.md");
+
+    vi.restoreAllMocks();
   });
 
   it("shared files survive in subagent sessions", async () => {

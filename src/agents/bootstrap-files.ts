@@ -78,13 +78,11 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = [
-    ...applyContextModeFilter({
-      files: filterBootstrapFilesForSession(rawFiles, sessionKey),
-      contextMode: params.contextMode,
-      runKind: params.runKind,
-    }),
-  ];
+  const bootstrapFiles = applyContextModeFilter({
+    files: filterBootstrapFilesForSession(rawFiles, sessionKey),
+    contextMode: params.contextMode,
+    runKind: params.runKind,
+  }).map((f) => ({ ...f }));
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
