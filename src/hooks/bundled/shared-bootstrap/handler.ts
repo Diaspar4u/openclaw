@@ -55,9 +55,9 @@ const sharedBootstrapHook: HookHandler = async (event) => {
       // shared files reach subagent and cron sessions unconditionally.
       // Also intentionally bypasses applyContextModeFilter — shared files
       // are injected in all modes including lightweight cron/default runs.
-      // Hook ordering note: bootstrap hooks execute sequentially on a shared
-      // context object. Whether this runs before or after bootstrap-extra-files,
-      // push() and spread-then-reassign both preserve existing entries.
+      // Hook ordering safety: bootstrap-extra-files only filters its own
+      // extras through filterBootstrapFilesForSession, preserving files
+      // already in context.bootstrapFiles regardless of execution order.
       event.context.bootstrapFiles.push({
         name: file,
         path: filePath,
@@ -65,8 +65,7 @@ const sharedBootstrapHook: HookHandler = async (event) => {
         missing: false,
       });
     } catch (readErr: unknown) {
-      const msg = readErr instanceof Error ? readErr.message : String(readErr);
-      log.warn(`skipping ${file}: read failed — ${msg}`);
+      log.warn(`skipping ${file}: read failed — ${formatErrorMessage(readErr)}`);
     } finally {
       syncFs.closeSync(opened.fd);
     }
