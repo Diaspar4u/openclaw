@@ -1586,4 +1586,17 @@ describe("listSessionsFromStore includeKeys", () => {
     expect(result.sessions.length).toBe(1);
     expect(result.sessions[0].key).toBe("agent:main:recent");
   });
+
+  test("includeKeys bypasses search filter", () => {
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store: makeStore(),
+      opts: { search: "Recent", includeKeys: ["agent:main:old-pinned"] },
+    });
+    const keys = result.sessions.map((s) => s.key);
+    expect(keys).toContain("agent:main:recent");
+    expect(keys).toContain("agent:main:old-pinned");
+    expect(keys).not.toContain("agent:main:old-other");
+  });
 });
