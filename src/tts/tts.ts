@@ -85,6 +85,11 @@ const DEFAULT_OUTPUT = {
   voiceCompatible: false,
 };
 
+const TELEPHONY_OUTPUT = {
+  openai: { format: "pcm" as const, sampleRate: 24000 },
+  elevenlabs: { format: "pcm_22050", sampleRate: 22050 },
+};
+
 const TTS_AUTO_MODES = new Set<TtsAutoMode>(["off", "always", "inbound", "tagged"]);
 
 export type ResolvedTtsConfig = {
