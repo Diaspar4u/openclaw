@@ -1,11 +1,5 @@
-<<<<<<< HEAD
 import { rmSync, statSync } from "node:fs";
-||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
-import { rmSync } from "node:fs";
-=======
-import { rmSync } from "node:fs";
 import { Readable, Transform } from "node:stream";
->>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { EdgeTTS } from "node-edge-tts";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";

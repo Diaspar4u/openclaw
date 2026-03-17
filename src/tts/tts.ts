@@ -40,13 +40,7 @@ import {
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
   resolveOpenAITtsInstructions,
-<<<<<<< HEAD
-||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
-  openaiTTS,
-=======
-  openaiTTS,
   openaiTTSStream,
->>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
   parseTtsDirectives,
   scheduleCleanup,
   summarizeText,
@@ -752,7 +746,6 @@ export async function textToSpeechTelephony(params: {
   return buildTtsFailureResult(errors);
 }
 
-<<<<<<< HEAD
 export async function listSpeechVoices(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -783,8 +776,6 @@ export async function listSpeechVoices(params: {
   });
 }
 
-||||||| parent of 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
-=======
 export type TtsTelephonyStreamResult = {
   success: boolean;
   stream?: Readable;
@@ -879,7 +870,6 @@ export async function textToSpeechTelephonyStream(params: {
   };
 }
 
->>>>>>> 74b3f52264 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
 export async function maybeApplyTtsToPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
