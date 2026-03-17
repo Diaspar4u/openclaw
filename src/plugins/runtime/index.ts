@@ -4,7 +4,6 @@ import {
   resolveApiKeyForProvider as resolveApiKeyForProviderRaw,
 } from "../../agents/model-auth.js";
 import { resolveStateDir } from "../../config/paths.js";
-<<<<<<< HEAD
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -16,16 +15,9 @@ import {
   runMediaUnderstandingFile,
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
-import { listSpeechVoices, textToSpeech, textToSpeechTelephony } from "../../tts/runtime.js";
+import { listSpeechVoices, textToSpeech, textToSpeechTelephony, textToSpeechTelephonyStream } from "../../tts/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
-||||||| parent of 2baf0aefd7 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
-import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
-import { textToSpeechTelephony } from "../../tts/tts.js";
-=======
-import { transcribeAudioFile } from "../../media-understanding/transcribe-audio.js";
-import { textToSpeechTelephony, textToSpeechTelephonyStream } from "../../tts/tts.js";
->>>>>>> 2baf0aefd7 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeEvents } from "./runtime-events.js";
@@ -154,8 +146,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
-<<<<<<< HEAD
-    tts: { textToSpeech, textToSpeechTelephony, listVoices: listSpeechVoices },
+    tts: { textToSpeech, textToSpeechTelephony, textToSpeechTelephonyStream, listVoices: listSpeechVoices },
     mediaUnderstanding: {
       runFile: runMediaUnderstandingFile,
       describeImageFile,
@@ -171,11 +162,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
-||||||| parent of 2baf0aefd7 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
-    tts: { textToSpeechTelephony },
-=======
-    tts: { textToSpeechTelephony, textToSpeechTelephonyStream },
->>>>>>> 2baf0aefd7 (feat(voice-call): stream TTS audio per-chunk to reduce playback latency)
     stt: { transcribeAudioFile },
     tools: createRuntimeTools(),
     channel: createRuntimeChannel(),
