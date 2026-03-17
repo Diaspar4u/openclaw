@@ -41,8 +41,10 @@ export function resolveContextWindowInfo(params: {
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
 
+  // agents.defaults.contextTokens is a fallback default, not a hard cap.
+  // When the user explicitly configured contextWindow in modelsConfig, honour it.
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (capTokens && capTokens < baseInfo.tokens) {
+  if (capTokens && capTokens < baseInfo.tokens && baseInfo.source !== "modelsConfig") {
     return { tokens: capTokens, source: "agentContextTokens" };
   }
 
