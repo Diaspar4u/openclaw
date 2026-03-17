@@ -20,9 +20,6 @@ export type RestartAttempt = {
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-// 0 = wait indefinitely for drain (used by gateway tool — user has force for break-glass).
-// Configurable via gateway.reload.deferralTimeoutMs.
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 0;
 // Finite timeout for non-interactive restart paths (config watcher, /restart, RPCs)
 // where the user has no force escape hatch. 5 minutes is generous for most agent turns.
 export const SCHEDULED_RESTART_MAX_WAIT_MS = 300_000;
