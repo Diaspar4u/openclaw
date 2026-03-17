@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { CoreAgentDeps } from "./core-bridge.js";
 import { generateVoiceResponse } from "./response-generator.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
-import type { CoreAgentDeps } from "./core-bridge.js";
 
 function createMockAgentRuntime(): CoreAgentDeps {
   return {
