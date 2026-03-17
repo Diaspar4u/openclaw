@@ -15,7 +15,12 @@ import {
   runMediaUnderstandingFile,
   transcribeAudioFile,
 } from "../../media-understanding/runtime.js";
-import { listSpeechVoices, textToSpeech, textToSpeechTelephony, textToSpeechTelephonyStream } from "../../tts/runtime.js";
+import {
+  listSpeechVoices,
+  textToSpeech,
+  textToSpeechTelephony,
+  textToSpeechTelephonyStream,
+} from "../../tts/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -146,7 +151,12 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
-    tts: { textToSpeech, textToSpeechTelephony, textToSpeechTelephonyStream, listVoices: listSpeechVoices },
+    tts: {
+      textToSpeech,
+      textToSpeechTelephony,
+      textToSpeechTelephonyStream,
+      listVoices: listSpeechVoices,
+    },
     mediaUnderstanding: {
       runFile: runMediaUnderstandingFile,
       describeImageFile,
