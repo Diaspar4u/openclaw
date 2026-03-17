@@ -8,17 +8,17 @@ import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/infra-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
-  dequeueWebhook,
-  enqueueWebhook,
-  replayPendingWebhooks,
-} from "../../../src/infra/webhook-queue.js";
-import {
   logWebhookError,
   logWebhookProcessed,
   logWebhookReceived,
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  dequeueWebhook,
+  enqueueWebhook,
+  replayPendingWebhooks,
+} from "../../../src/infra/webhook-queue.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
