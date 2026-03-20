@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -1089,14 +1090,31 @@ export async function compactEmbeddedPiSessionDirect(
         // Truncate session file to remove compacted entries (#39953)
         if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
           try {
+            // Archive pre-truncation session file so original messages are preserved
+            const sessionDir = path.dirname(params.sessionFile);
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const archiveName = `${path.basename(params.sessionFile, ".jsonl")}.pre-truncation.${timestamp}.jsonl`;
             const truncResult = await truncateSessionAfterCompaction({
               sessionFile: params.sessionFile,
+              archivePath: path.join(sessionDir, "archive", archiveName),
             });
             if (truncResult.truncated) {
               log.info(
                 `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
                   `(sessionKey=${params.sessionKey ?? params.sessionId})`,
               );
+              // Retain only the last 10 archive files to prevent unbounded disk growth
+              const archiveDir = path.join(path.dirname(params.sessionFile), "archive");
+              try {
+                const entries = await fs.readdir(archiveDir);
+                const archives = entries.filter(e => e.includes(".pre-truncation.")).sort();
+                const MAX_ARCHIVES = 10;
+                if (archives.length > MAX_ARCHIVES) {
+                  for (const old of archives.slice(0, archives.length - MAX_ARCHIVES)) {
+                    await fs.unlink(path.join(archiveDir, old)).catch(() => {});
+                  }
+                }
+              } catch { /* archive dir may not exist yet */ }
             }
           } catch (err) {
             log.warn("[compaction] post-compaction truncation failed", {
