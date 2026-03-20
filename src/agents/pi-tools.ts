@@ -1,7 +1,7 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { MutationGateConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -184,6 +184,30 @@ export function resolveToolLoopDetectionConfig(params: {
       ...global.detectors,
       ...agent.detectors,
     },
+  };
+}
+
+export function resolveMutationGateConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): MutationGateConfig | undefined {
+  const global = params.cfg?.tools?.mutationGate;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.mutationGate
+      : undefined;
+
+  if (!agent) {
+    return global;
+  }
+  if (!global) {
+    return agent;
+  }
+
+  return {
+    enabled: agent.enabled ?? global.enabled,
+    extraMutations: [...new Set([...(global.extraMutations ?? []), ...(agent.extraMutations ?? [])])],
+    channels: [...new Set([...(global.channels ?? []), ...(agent.channels ?? [])])],
   };
 }
 
@@ -606,6 +630,10 @@ export function createOpenClawCodingTools(options?: {
       modelCompat: options?.modelCompat,
     }),
   );
+  // Detect whether the message tool survived policy filtering — if not, the
+  // mutation gate cannot send approval-request messages and must skip enforcement
+  // to avoid deadlocking the agent.
+  const hasMessageTool = normalized.some((t) => t.name === "message");
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
@@ -613,6 +641,9 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      mutationGate: resolveMutationGateConfig({ cfg: options?.config, agentId }),
+      agentWorkspace: workspaceRoot,
+      hasMessageTool,
     }),
   );
   const withAbort = options?.abortSignal

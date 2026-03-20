@@ -1,9 +1,10 @@
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { MutationGateConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import { checkMutationGate } from "./mutation-gate.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -14,6 +15,10 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  mutationGate?: MutationGateConfig;
+  agentWorkspace?: string;
+  /** When false, the message tool is not in the current tool set. */
+  hasMessageTool?: boolean;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -94,6 +99,22 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  // Mutation gate — block mutations that lack an inline-button approval.
+  if (args.ctx?.mutationGate?.enabled && args.ctx?.sessionKey) {
+    const gateResult = checkMutationGate({
+      toolName,
+      params,
+      sessionKey: args.ctx.sessionKey,
+      config: args.ctx.mutationGate,
+      agentWorkspace: args.ctx.agentWorkspace,
+      hasMessageTool: args.ctx.hasMessageTool,
+    });
+    if (!gateResult.allowed) {
+      log.warn(`mutation gate blocked: tool=${toolName} session=${args.ctx.sessionKey}`);
+      return { blocked: true, reason: gateResult.reason };
+    }
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =

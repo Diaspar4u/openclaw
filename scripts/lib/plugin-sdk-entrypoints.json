@@ -98,5 +98,6 @@
   "web-media",
   "speech",
   "state-paths",
-  "tool-send"
+  "tool-send",
+  "mutation-gate"
 ]
