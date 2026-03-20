@@ -6,10 +6,8 @@
  * into inter-agent messaging.
  */
 
-import { resolveTelegramFetch } from "../../../../extensions/telegram/src/fetch.js";
-import { makeProxyFetch } from "../../../../extensions/telegram/src/proxy.js";
-import { resolveTelegramToken } from "../../../../extensions/telegram/src/token.js";
 import { type HookConfig, type OpenClawConfig, loadConfig } from "../../../config/config.js";
+import { resolveTelegramToken } from "../../../plugin-sdk/telegram.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentToAgentEvent, type InternalHookHandler } from "../../internal-hooks.js";
@@ -74,7 +72,6 @@ export async function postToTelegram(
   chatId: string,
   topicId: number | undefined,
   text: string,
-  cfg?: OpenClawConfig,
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const body: Record<string, unknown> = {
@@ -87,11 +84,7 @@ export async function postToTelegram(
     body.message_thread_id = topicId;
   }
 
-  const telegramCfg = cfg?.channels?.telegram;
-  const proxyUrl = telegramCfg?.proxy?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
-  const telegramFetch = resolveTelegramFetch(proxyFetch, { network: telegramCfg?.network });
-  const response = await telegramFetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -155,7 +148,7 @@ const handler: InternalHookHandler = async (event) => {
 
     const { sourceAgentId, targetAgentId, message: msg } = event.context;
     const text = formatA2ALogMessage(sourceAgentId, targetAgentId, msg, event.timestamp);
-    await postToTelegram(token, chatId, topicId, text, cfg);
+    await postToTelegram(token, chatId, topicId, text);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log.error(`Failed to log A2A message: ${message}`);

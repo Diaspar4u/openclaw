@@ -26,12 +26,20 @@ vi.mock("../../../config/config.js", () => ({
 }));
 
 let mockTokenBehavior: "success" | "throw" = "success";
-vi.mock("../../../../extensions/telegram/src/token.js", () => ({
+vi.mock("../../../plugin-sdk/telegram.js", () => ({
   resolveTelegramToken: vi.fn(() => {
     if (mockTokenBehavior === "throw") {
       throw new Error("no token configured");
     }
     return { token: "fake-bot-token", source: "config" };
+  }),
+}));
+
+vi.mock("../../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
   }),
 }));
 
@@ -42,17 +50,7 @@ const mockTelegramFetch = vi.fn(() =>
     text: () => Promise.resolve("{}"),
   }),
 );
-vi.mock("../../../../extensions/telegram/src/fetch.js", () => ({
-  resolveTelegramFetch: () => mockTelegramFetch,
-}));
-
-vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
-}));
+vi.stubGlobal("fetch", mockTelegramFetch);
 
 describe("a2a-logging handler", () => {
   beforeEach(() => {
