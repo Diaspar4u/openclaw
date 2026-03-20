@@ -398,23 +398,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         const resetSessionKey = requestedSessionKey;
         const sessionLoad = loadSessionEntry(resetSessionKey);
         const cfgResolved = sessionLoad.cfg ?? cfg;
-        if (cfgResolved.session?.suppressBareResetGreeting) {
+        // images comes from the gateway RPC payload (equivalent to sessionCtx.MediaPath in the channel path)
+        if (cfgResolved.session?.suppressBareResetGreeting && images.length === 0) {
           // Greeting suppressed — reset done, no LLM call needed.
-          // Bump session updatedAt so pruning logic sees the reset.
-          if (sessionLoad.storePath) {
-            await updateSessionStore(sessionLoad.storePath, (store) => {
-              const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-                cfg: cfgResolved,
-                key: resetSessionKey,
-                store,
-              });
-              const existing = store[primaryKey];
-              if (existing) {
-                existing.updatedAt = Date.now();
-                store[primaryKey] = existing;
-              }
-            });
-          }
+          // performGatewaySessionReset already stamped updatedAt on the session entry.
           const accepted = {
             runId: idem,
             status: "accepted" as const,

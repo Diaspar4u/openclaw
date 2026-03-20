@@ -292,7 +292,10 @@ export async function runPreparedReply(
   const isBareSessionReset =
     isNewSession &&
     ((baseBodyTrimmedRaw.length === 0 && rawBodyTrimmed.length > 0) || isBareNewOrReset);
-  if (isBareSessionReset && cfg.session?.suppressBareResetGreeting) {
+  const hasMediaAttachment = Boolean(
+    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+  );
+  if (isBareSessionReset && cfg.session?.suppressBareResetGreeting && !hasMediaAttachment) {
     // Intentionally exits before sendResetSessionNotice (line ~417): the config
     // option suppresses ALL bare-reset output, including the operator notice.
     typing.cleanup();
@@ -315,9 +318,6 @@ export async function runPreparedReply(
     ? baseBodyFinal
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
-  const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
-  );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
