@@ -34,7 +34,8 @@ export function resolveToken(cfg: OpenClawConfig, hookToken: string | undefined)
     return hookToken;
   }
   try {
-    const resolved = resolveTelegramToken(cfg);
+    const defaultAccount = cfg.channels?.telegram?.defaultAccount;
+    const resolved = resolveTelegramToken(cfg, defaultAccount ? { accountId: defaultAccount } : {});
     return resolved.token;
   } catch (err) {
     log.warn(
@@ -119,8 +120,15 @@ const handler: InternalHookHandler = async (event) => {
       return;
     }
 
-    // Validate individual fields from generic HookConfig (session-memory pattern)
-    const chatId = typeof hookConfig.chatId === "string" ? hookConfig.chatId : undefined;
+    // Validate individual fields from generic HookConfig (session-memory pattern).
+    // chatId accepts both string and number — openclaw config set stores bare numbers as numbers.
+    const rawChatId = hookConfig.chatId;
+    const chatId =
+      typeof rawChatId === "string"
+        ? rawChatId
+        : typeof rawChatId === "number"
+          ? String(rawChatId)
+          : undefined;
     const topicId = typeof hookConfig.topicId === "number" ? hookConfig.topicId : undefined;
     const hookToken = typeof hookConfig.token === "string" ? hookConfig.token : undefined;
 
