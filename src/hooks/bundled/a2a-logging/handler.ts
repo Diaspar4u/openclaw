@@ -27,7 +27,7 @@ export function resolveA2AConfig(cfg: OpenClawConfig): HookConfig | undefined {
   return hookConfig;
 }
 
-export function resolveToken(cfg: OpenClawConfig, hookToken: string | undefined): string {
+export function resolveToken(cfg: OpenClawConfig, hookToken: string | undefined): string | undefined {
   if (hookToken) {
     return hookToken;
   }
@@ -39,7 +39,7 @@ export function resolveToken(cfg: OpenClawConfig, hookToken: string | undefined)
     log.warn(
       `a2a-logging: failed to resolve Telegram token: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return "";
+    return undefined;
   }
 }
 
@@ -84,6 +84,10 @@ export async function postToTelegram(
     body.message_thread_id = topicId;
   }
 
+  // Note: a2a-logging uses native fetch, not the Telegram proxy/network config.
+  // This is intentional — the logging hook sends tiny JSON payloads and does not
+  // need proxy support. If the gateway requires a proxy for all outbound traffic,
+  // set HTTPS_PROXY in the environment instead.
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

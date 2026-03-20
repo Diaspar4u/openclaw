@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInternalHookEvent, type AgentToAgentHookContext } from "../../internal-hooks.js";
 
 const mockConfig = {
@@ -50,12 +50,16 @@ const mockTelegramFetch = vi.fn(() =>
     text: () => Promise.resolve("{}"),
   }),
 );
-vi.stubGlobal("fetch", mockTelegramFetch);
 
 describe("a2a-logging handler", () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.stubGlobal("fetch", mockTelegramFetch);
     mockTokenBehavior = "success";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   describe("formatA2ALogMessage", () => {
