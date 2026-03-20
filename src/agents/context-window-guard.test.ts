@@ -130,7 +130,7 @@ describe("context-window-guard", () => {
       cfg,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
-      modelContextWindow: 200_000,
+      modelContextWindow: 500_000,
       defaultTokens: 200_000,
     });
     expect(info.source).toBe("modelsConfig");
