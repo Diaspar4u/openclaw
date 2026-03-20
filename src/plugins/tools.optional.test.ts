@@ -8,13 +8,25 @@ type MockRegistryToolEntry = {
 };
 
 const loadOpenClawPluginsMock = vi.fn();
+const { getActivePluginRegistryMock, getActivePluginRegistryVersionMock } = vi.hoisted(() => ({
+  getActivePluginRegistryMock: vi.fn(() => null as unknown),
+  getActivePluginRegistryVersionMock: vi.fn(() => 0),
+}));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
 }));
 
-let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
+vi.mock("./runtime.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("./runtime.js")>();
+  return {
+    ...orig,
+    getActivePluginRegistry: getActivePluginRegistryMock,
+    getActivePluginRegistryVersion: getActivePluginRegistryVersionMock,
+  };
+});
 
+let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 function makeTool(name: string) {
   return {
     name,
@@ -95,6 +107,8 @@ describe("resolvePluginTools optional tools", () => {
     vi.resetModules();
     loadOpenClawPluginsMock.mockClear();
     ({ resolvePluginTools } = await import("./tools.js"));
+    getActivePluginRegistryMock.mockReturnValue(null);
+    getActivePluginRegistryVersionMock.mockReturnValue(0);
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -190,5 +204,29 @@ describe("resolvePluginTools optional tools", () => {
         },
       }),
     );
+  });
+
+  it("uses active registry instead of reloading plugins", () => {
+    const activeRegistry = {
+      tools: [
+        {
+          pluginId: "active-plugin",
+          optional: false,
+          source: "/tmp/active.js",
+          names: ["active_tool"],
+          factory: () => makeTool("active_tool"),
+        },
+      ],
+      diagnostics: [],
+    };
+    getActivePluginRegistryVersionMock.mockReturnValue(1);
+    getActivePluginRegistryMock.mockReturnValue(activeRegistry);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["active_tool"]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
