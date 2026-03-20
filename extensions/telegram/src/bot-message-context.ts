@@ -375,9 +375,7 @@ export const buildTelegramMessageContext = async ({
               }
             },
             clearReactions: async () => {
-              if (reactionApi) {
-                await reactionApi(chatId, msg.message_id, []);
-              }
+              await reactionApi!(chatId, msg.message_id, []);
             },
           },
           initialEmoji: ackReaction,

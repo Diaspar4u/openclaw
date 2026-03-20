@@ -395,6 +395,8 @@ export function createStatusReactionController(params: {
       return;
     }
 
+    // Mark finished to prevent late tool/thinking callbacks from overwriting
+    finished = true;
     clearAllTimers();
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
