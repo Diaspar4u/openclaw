@@ -1961,6 +1961,72 @@ describe("compaction-safeguard emergency fallback", () => {
     }
   });
 
+  it("recovers partial history summary when split-turn prefix summarization fails", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    let callCount = 0;
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return "recovered main history summary content";
+      }
+      throw new Error("prefix summarization failed");
+    });
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix msg 1", timestamp: Date.now() - 9000 },
+          { role: "assistant", content: "prefix reply 1", timestamp: Date.now() - 8500 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-partial",
+        tokensBefore: 999_999,
+        isSplitTurn: true,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("sk-test"),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary: string };
+      };
+
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("Emergency compaction");
+      expect(result.compaction!.summary).toContain("Recovered history summary");
+      expect(result.compaction!.summary).toContain("recovered main history summary content");
+      expect(result.compaction!.summary).toContain("partial history summary was recovered");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("truncates long error messages to prevent unbounded summary growth", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();

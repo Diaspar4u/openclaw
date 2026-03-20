@@ -740,6 +740,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     let preservedTurnsSection = "";
     let droppedSummary: string | undefined;
+    let partialHistorySummary: string | undefined;
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
@@ -845,6 +846,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
+                // Re-throw abort errors so signal cancellation propagates correctly.
+                if (
+                  signal?.aborted ||
+                  (droppedError instanceof Error && droppedError.name === "AbortError")
+                ) {
+                  throw droppedError;
+                }
                 log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
@@ -914,6 +922,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
+          partialHistorySummary = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await summarizeInStages({
               messages: turnPrefixMessages,
@@ -1054,10 +1063,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // structured context we can extract (prior summary, recent turns, tool
       // failures, file ops) rather than cancelling and leaving the session stuck
       // in a compact-fail-compact loop. Some detail loss is the accepted tradeoff.
+      const recoveredSummarySection = partialHistorySummary
+        ? `\n\nRecovered history summary:\n${sanitizeForPromptLiteral(partialHistorySummary)}`
+        : "";
+      const unsummarizedNote = partialHistorySummary
+        ? `A partial history summary was recovered before the failure.`
+        : `History was cut at the SDK-computed boundary; content before that point is not summarized.`;
       const emergencySummary =
         `Emergency compaction: summarization failed (${errorMessage}). ` +
-        `History was cut at the SDK-computed boundary; content before that point is not summarized.` +
+        unsummarizedNote +
         priorContext +
+        recoveredSummarySection +
         splitTurnNote +
         preservedTurnsSection +
         toolFailureSection +
