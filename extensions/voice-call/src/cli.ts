@@ -85,7 +85,7 @@ function summarizeSeries(values: number[]): {
   };
 }
 
-type GatewayRpcOpts = { url?: string; token?: string; timeout?: string };
+type GatewayRpcOpts = { url?: string; token?: string; password?: string; timeout?: string };
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
@@ -108,6 +108,7 @@ async function rpc<T = Record<string, unknown>>(
     return await callGateway<T>({
       url: opts.url,
       token: opts.token,
+      password: opts.password,
       method,
       params,
       timeoutMs: parseTimeoutMs(opts.timeout),
@@ -137,6 +138,7 @@ function addGatewayOpts(cmd: Command): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL")
     .option("--token <token>", "Gateway token")
+    .option("--password <password>", "Gateway password")
     .option("--timeout <ms>", "Timeout in ms", "15000");
 }
 
