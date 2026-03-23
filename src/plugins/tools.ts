@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
+import { getActivePluginRegistry, getActivePluginRegistryVersion } from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -59,17 +60,32 @@ export function resolvePluginTools(params: {
     return [];
   }
 
-  const registry = loadOpenClawPlugins({
-    config: effectiveConfig,
-    workspaceDir: params.context.workspaceDir,
-    runtimeOptions: params.allowGatewaySubagentBinding
-      ? {
-          allowGatewaySubagentBinding: true,
-        }
-      : undefined,
-    env,
-    logger: createPluginLoaderLogger(log),
-  });
+  // Prefer the active registry (set during gateway startup) to avoid
+  // re-registering plugins when config changes mid-lifecycle.  Re-loading
+  // creates fresh register() closures whose singleton state (e.g.
+  // runtimePromise) is empty while the old services still hold resources
+  // like bound ports, causing EADDRINUSE on stateful plugins.
+  // Note: the active registry uses the gateway's startup workspaceDir;
+  // per-session workspaceDir differences are not expected in gateway mode.
+  // In a multi-workspace process the loader's own cache-key invalidation
+  // handles workspace changes, so falling through to loadOpenClawPlugins
+  // when no active registry exists is the correct path for that case.
+  // Version > 0 means registry was explicitly activated (gateway startup or
+  // prior loadOpenClawPlugins call); version 0 = default empty placeholder.
+  const activeRegistry = getActivePluginRegistryVersion() > 0 ? getActivePluginRegistry() : null;
+  const registry =
+    activeRegistry ??
+    loadOpenClawPlugins({
+      config: effectiveConfig,
+      workspaceDir: params.context.workspaceDir,
+      runtimeOptions: params.allowGatewaySubagentBinding
+        ? {
+            allowGatewaySubagentBinding: true,
+          }
+        : undefined,
+      env,
+      logger: createPluginLoaderLogger(log),
+    });
 
   const tools: AnyAgentTool[] = [];
   const existing = params.existingToolNames ?? new Set<string>();
