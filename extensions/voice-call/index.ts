@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import {
   definePluginEntry,
+  errorShape,
+  ErrorCodes,
   type GatewayRequestHandlerOptions,
   type OpenClawPluginApi,
 } from "./api.js";
@@ -199,8 +201,12 @@ export default definePluginEntry({
       return runtime;
     };
 
-    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: err instanceof Error ? err.message : String(err) });
+    const sendError = (respond: GatewayRequestHandlerOptions["respond"], err: unknown) => {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, err instanceof Error ? err.message : String(err)),
+      );
     };
 
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
@@ -224,7 +230,11 @@ export default definePluginEntry({
         mode: params.mode,
       });
       if (!result.success) {
-        params.respond(false, { error: result.error || "initiate failed" });
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, result.error || "initiate failed"),
+        );
         return;
       }
       params.respond(true, { callId: result.callId, initiated: true });
@@ -245,12 +255,20 @@ export default definePluginEntry({
     }) => {
       const request = await resolveCallMessageRequest(params.requestParams);
       if ("error" in request) {
-        params.respond(false, { error: request.error });
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, request.error ?? "invalid request"),
+        );
         return;
       }
       const result = await params.action(request);
       if (!result.success) {
-        params.respond(false, { error: result.error || params.failure });
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, result.error || params.failure),
+        );
         return;
       }
       params.respond(
@@ -267,7 +285,7 @@ export default definePluginEntry({
         try {
           const message = typeof params?.message === "string" ? params.message.trim() : "";
           if (!message) {
-            respond(false, { error: "message required" });
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "message required"));
             return;
           }
           const rt = await ensureRuntime();
@@ -276,7 +294,7 @@ export default definePluginEntry({
               ? params.to.trim()
               : rt.config.toNumber;
           if (!to) {
-            respond(false, { error: "to required" });
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "to required"));
             return;
           }
           const mode =
@@ -333,13 +351,17 @@ export default definePluginEntry({
         try {
           const callId = typeof params?.callId === "string" ? params.callId.trim() : "";
           if (!callId) {
-            respond(false, { error: "callId required" });
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "callId required"));
             return;
           }
           const rt = await ensureRuntime();
           const result = await rt.manager.endCall(callId);
           if (!result.success) {
-            respond(false, { error: result.error || "end failed" });
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.UNAVAILABLE, result.error || "end failed"),
+            );
             return;
           }
           respond(true, { success: true });
@@ -360,7 +382,7 @@ export default definePluginEntry({
                 ? params.sid.trim()
                 : "";
           if (!raw) {
-            respond(false, { error: "callId required" });
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "callId required"));
             return;
           }
           const rt = await ensureRuntime();
@@ -383,15 +405,18 @@ export default definePluginEntry({
           const to = typeof params?.to === "string" ? params.to.trim() : "";
           const message = typeof params?.message === "string" ? params.message.trim() : "";
           if (!to) {
-            respond(false, { error: "to required" });
+            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "to required"));
             return;
           }
           const rt = await ensureRuntime();
+          const mode =
+            params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
           await initiateCallAndRespond({
             rt,
             respond,
             to,
             message: message || undefined,
+            mode,
           });
         } catch (err) {
           sendError(respond, err);
@@ -526,7 +551,6 @@ export default definePluginEntry({
         registerVoiceCallCli({
           program,
           config,
-          ensureRuntime,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },
