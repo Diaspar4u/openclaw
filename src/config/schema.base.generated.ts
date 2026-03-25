@@ -8910,6 +8910,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          suppressBareResetGreeting: {
+            type: "boolean",
+          },
         },
         additionalProperties: false,
       },
