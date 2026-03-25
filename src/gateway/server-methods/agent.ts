@@ -508,7 +508,37 @@ export const agentHandlers: GatewayRequestHandlers = {
       const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
       if (postResetMessage) {
         message = postResetMessage;
-      } else {
+      } else if (requestedSessionKey) {
+        // Resolve per-agent config before the suppression check so agent-level
+        // overrides of suppressBareResetGreeting are respected.
+        const resetSessionKey = requestedSessionKey;
+        const sessionLoad = loadSessionEntry(resetSessionKey);
+        const cfgResolved = sessionLoad.cfg ?? cfg;
+        // images comes from the gateway RPC payload (equivalent to sessionCtx.MediaPath in the channel path)
+        if (cfgResolved.session?.suppressBareResetGreeting && images.length === 0) {
+          // Greeting suppressed — reset done, no LLM call needed.
+          // performGatewaySessionReset already stamped updatedAt on the session entry.
+          const accepted = {
+            runId: idem,
+            status: "ok" as const,
+            acceptedAt: Date.now(),
+            reset: true,
+            sessionKey: requestedSessionKey,
+          };
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `agent:${idem}`,
+            entry: {
+              ts: Date.now(),
+              ok: true,
+              payload: accepted,
+            },
+          });
+          respond(true, accepted, undefined, { runId: idem });
+          return;
+        }
+      }
+      if (!postResetMessage) {
         // Keep bare /new and /reset behavior aligned with chat.send:
         // reset first, then run a fresh-session greeting prompt in-place.
         // Date is embedded in the prompt so agents read the correct daily

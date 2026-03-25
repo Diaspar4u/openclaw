@@ -133,6 +133,8 @@ export type SessionConfig = {
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
+  /** Suppress the LLM greeting on bare /new or /reset (no trailing text). Default: false. */
+  suppressBareResetGreeting?: boolean;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";
