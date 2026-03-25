@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
@@ -872,6 +873,38 @@ export async function compactEmbeddedPiSessionDirect(
         // Truncate session file to remove compacted entries (#39953)
         if (params.config?.agents?.defaults?.compaction?.truncateAfterCompaction) {
           try {
+            // Archive pre-truncation session file so original messages are preserved.
+            // We perform the copy here (not via archivePath) so we can abort truncation
+            // if the archive fails — truncateSessionAfterCompaction only logs a warning
+            // on archive failure and proceeds with the destructive rewrite.
+            const sessionDir = path.dirname(params.sessionFile);
+            const sessionBaseName = path.basename(params.sessionFile, ".jsonl");
+            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const archiveName = `${sessionBaseName}.pre-truncation.${timestamp}.jsonl`;
+            const archiveDir = path.join(sessionDir, "archive");
+            const archivePath = path.join(archiveDir, archiveName);
+            try {
+              await fs.mkdir(archiveDir, { recursive: true });
+              await fs.copyFile(params.sessionFile, archivePath);
+            } catch (archiveErr) {
+              const reason = archiveErr instanceof Error ? archiveErr.message : String(archiveErr);
+              log.warn(
+                `[compaction] skipping post-compaction truncation — failed to archive session: ${reason} ` +
+                  `(sessionKey=${params.sessionKey ?? params.sessionId})`,
+              );
+              // Skip truncation entirely — no backup means no safe rollback
+              return {
+                ok: true,
+                compacted: true,
+                result: {
+                  summary: result.summary,
+                  firstKeptEntryId: result.firstKeptEntryId,
+                  tokensBefore: observedTokenCount ?? result.tokensBefore,
+                  tokensAfter,
+                  details: result.details,
+                },
+              };
+            }
             const truncResult = await truncateSessionAfterCompaction({
               sessionFile: params.sessionFile,
             });
@@ -880,6 +913,20 @@ export async function compactEmbeddedPiSessionDirect(
                 `[compaction] post-compaction truncation removed ${truncResult.entriesRemoved} entries ` +
                   `(sessionKey=${params.sessionKey ?? params.sessionId})`,
               );
+              // Retain only the last 10 archive files per session to prevent unbounded disk growth
+              try {
+                const entries = await fs.readdir(archiveDir);
+                const prefix = `${sessionBaseName}.pre-truncation.`;
+                const archives = entries.filter((e) => e.startsWith(prefix)).toSorted();
+                const MAX_ARCHIVES = 10;
+                if (archives.length > MAX_ARCHIVES) {
+                  for (const old of archives.slice(0, archives.length - MAX_ARCHIVES)) {
+                    await fs.unlink(path.join(archiveDir, old)).catch(() => {});
+                  }
+                }
+              } catch {
+                /* archive dir may not exist yet */
+              }
             }
           } catch (err) {
             log.warn("[compaction] post-compaction truncation failed", {

@@ -2459,6 +2459,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  truncateAfterCompaction: {
+                    type: "boolean",
+                  },
                   memoryFlush: {
                     type: "object",
                     properties: {
