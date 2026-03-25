@@ -11,7 +11,6 @@ import {
 } from "../media/input-files.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
@@ -511,16 +510,6 @@ export async function applyMediaUnderstanding(params: {
         } else {
           ctx.CommandBody = transcript;
           ctx.RawBody = transcript;
-        }
-        // Echo transcript back to chat before agent processing, if configured.
-        const audioCfg = cfg.tools?.media?.audio;
-        if (audioCfg?.echoTranscript && transcript) {
-          await sendTranscriptEcho({
-            ctx,
-            cfg,
-            transcript,
-            format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
-          });
         }
       } else if (originalUserText) {
         ctx.CommandBody = originalUserText;
