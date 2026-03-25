@@ -245,9 +245,15 @@ async function tryWriteRestartSentinelPayload(
 function loadSchemaWithPlugins(): ConfigSchemaResponse {
   const cfg = loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+  // activate:false + cache:false — schema loads are read-only snapshots that must
+  // NOT replace the gateway's active plugin registry.  Without this, every Control
+  // UI schema request silently activates a new registry; if that load fails to
+  // resolve a channel plugin the gateway's working registry is replaced with one
+  // missing the channel, causing "Channel is unavailable" tool errors.
   const pluginRegistry = loadOpenClawPlugins({
     config: cfg,
-    cache: true,
+    activate: false,
+    cache: false,
     workspaceDir,
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
