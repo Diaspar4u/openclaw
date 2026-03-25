@@ -66,6 +66,8 @@ export async function buildTelegramInboundContextPayload(params: {
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
+  /** Preflight audio transcript from mention-gated voice note transcription. */
+  transcript?: string;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
@@ -243,6 +245,7 @@ export async function buildTelegramInboundContextPayload(params: {
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
+    Transcript: params.transcript,
     CommandAuthorized: commandAuthorized,
     CommandSource: options?.commandSource,
     MessageThreadId: threadSpec.id,

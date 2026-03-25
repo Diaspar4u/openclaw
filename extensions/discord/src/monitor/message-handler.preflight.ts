@@ -975,6 +975,7 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
+    transcript: preflightTranscript,
     threadBindings: params.threadBindings,
     discordRestFetch: params.discordRestFetch,
   };

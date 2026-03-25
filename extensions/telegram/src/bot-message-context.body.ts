@@ -49,6 +49,8 @@ export type TelegramInboundBodyResult = {
   shouldBypassMention: boolean;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
+  /** Preflight audio transcript (if voice note was transcribed for mention gating). */
+  transcript?: string;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -273,5 +275,6 @@ export async function resolveTelegramInboundBody(params: {
     shouldBypassMention: mentionGate.shouldBypassMention,
     stickerCacheHit,
     locationData: locationData ?? undefined,
+    transcript: preflightTranscript,
   };
 }

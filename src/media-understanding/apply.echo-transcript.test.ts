@@ -32,7 +32,6 @@ const getApiKeyForModelMock = vi.hoisted(() =>
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
-const mockDeliverOutboundPayloads = vi.hoisted(() => vi.fn());
 
 const { MediaFetchErrorMock } = vi.hoisted(() => {
   class MediaFetchErrorMock extends Error {
@@ -105,18 +104,6 @@ function createAudioConfigWithEcho(opts?: {
   return { cfg, providers };
 }
 
-function expectSingleEchoDeliveryCall() {
-  expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
-  const callArgs = mockDeliverOutboundPayloads.mock.calls[0]?.[0];
-  expect(callArgs).toBeDefined();
-  return callArgs as {
-    to?: string;
-    channel?: string;
-    accountId?: string;
-    payloads: Array<{ text?: string }>;
-  };
-}
-
 function createAudioConfigWithoutEchoFlag() {
   const { cfg, providers } = createAudioConfigWithEcho();
   const audio = cfg.tools?.media?.audio as { echoTranscript?: boolean } | undefined;
@@ -172,9 +159,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
       runExec: runExecMock,
       runCommandWithTimeout: runCommandWithTimeoutMock,
     }));
-    vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
-      deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
-    }));
     vi.doMock("./provider-registry.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./provider-registry.js")>();
       const registryProviders = createRegistryMediaProviders();
@@ -221,8 +205,6 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     fetchRemoteMediaMock.mockClear();
     runExecMock.mockReset();
     runCommandWithTimeoutMock.mockReset();
-    mockDeliverOutboundPayloads.mockClear();
-    mockDeliverOutboundPayloads.mockResolvedValue([{ channel: "whatsapp", messageId: "echo-1" }]);
     clearMediaUnderstandingBinaryCacheForTests?.();
   });
 
@@ -234,27 +216,11 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     suiteTempMediaRootDir = "";
   });
 
-  it("does NOT echo when echoTranscript is false (default)", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: false });
+  // Echo delivery is now in get-reply.ts, not in applyMediaUnderstanding.
+  // These tests verify that applyMediaUnderstanding sets ctx.Transcript correctly
+  // (the prerequisite for the echo to fire from the reply pipeline).
 
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when echoTranscript is absent (default)", async () => {
-    const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithoutEchoFlag();
-
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("echoes transcript with default format when echoTranscript is true", async () => {
+  it("sets ctx.Transcript when audio transcription succeeds", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx = createAudioCtxWithProvider(mediaPath);
     const { cfg, providers } = createAudioConfigWithEcho({
@@ -264,27 +230,28 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.channel).toBe("whatsapp");
-    expect(callArgs.to).toBe("+10000000001");
-    expect(callArgs.accountId).toBe("acc1");
-    expect(callArgs.payloads).toHaveLength(1);
-    expect(callArgs.payloads[0].text).toBe('📝 "hello world"');
+    expect(ctx.Transcript).toBe("hello world");
   });
 
-  it("uses custom echoFormat when provided", async () => {
+  it("sets ctx.Transcript regardless of echoTranscript config", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({
-      echoTranscript: true,
-      echoFormat: "🎙️ Heard: {transcript}",
-      transcribedText: "custom message",
-    });
+    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: false });
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.payloads[0].text).toBe("🎙️ Heard: custom message");
+    // Transcript is always set when audio outputs exist — echo gating is in get-reply.ts
+    expect(ctx.Transcript).toBe("hello world");
+  });
+
+  it("sets ctx.Transcript when echoTranscript flag is absent", async () => {
+    const mediaPath = await createTempAudioFile();
+    const ctx = createAudioCtxWithProvider(mediaPath);
+    const { cfg, providers } = createAudioConfigWithoutEchoFlag();
+
+    await applyMediaUnderstanding({ ctx, cfg, providers });
+
+    expect(ctx.Transcript).toBe("hello world");
   });
 
   it("does NOT echo when there are no audio attachments", async () => {
@@ -311,27 +278,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     // No audio outputs → Transcript not set → no echo
     expect(ctx.Transcript).toBeUndefined();
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("does NOT echo when transcription fails", async () => {
+  it("sets ctx.Transcript even for non-routable channels", async () => {
     const mediaPath = await createTempAudioFile();
-    const ctx = createAudioCtxWithProvider(mediaPath);
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
-    providers.groq.transcribeAudio = async () => {
-      throw new Error("transcription provider failure");
-    };
-
-    // Should not throw; transcription failure is swallowed by runner
-    await applyMediaUnderstanding({ ctx, cfg, providers });
-
-    expect(ctx.Transcript).toBeUndefined();
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
-  it("does NOT echo when channel is not deliverable", async () => {
-    const mediaPath = await createTempAudioFile();
-    // Use an internal/non-deliverable channel
     const ctx = createAudioCtxWithProvider(mediaPath, {
       Provider: "internal-system",
       From: "some-source",
@@ -340,13 +290,10 @@ describe("applyMediaUnderstanding – echo transcript", () => {
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    // Transcript should be set (transcription succeeded)
     expect(ctx.Transcript).toBe("hello world");
-    // But echo should be skipped
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("does NOT echo when ctx has no From or OriginatingTo", async () => {
+  it("sets ctx.Transcript when ctx has no From or OriginatingTo", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -360,40 +307,37 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
     expect(ctx.Transcript).toBe("hello world");
-    expect(mockDeliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("uses OriginatingTo when From is absent", async () => {
+  it("sets ctx.Transcript for Telegram with accountId and threadId", async () => {
     const mediaPath = await createTempAudioFile();
-    const ctx: MsgContext = {
-      Body: "<media:audio>",
-      MediaPath: mediaPath,
-      MediaType: "audio/ogg",
-      Provider: "whatsapp",
-      OriginatingTo: "+19999999999",
-    };
-    const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
+    const ctx = createAudioCtxWithProvider(mediaPath, {
+      Provider: "telegram",
+      From: "12345",
+      AccountId: "dev",
+      MessageThreadId: "2181",
+    });
+    const { cfg, providers } = createAudioConfigWithEcho({
+      echoTranscript: true,
+      transcribedText: "test transcript",
+    });
 
     await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    const callArgs = expectSingleEchoDeliveryCall();
-    expect(callArgs.to).toBe("+19999999999");
+    expect(ctx.Transcript).toBe("test transcript");
   });
 
-  it("echo delivery failure does not throw or break transcription", async () => {
+  it("transcription failure does not set ctx.Transcript", async () => {
     const mediaPath = await createTempAudioFile();
     const ctx = createAudioCtxWithProvider(mediaPath);
     const { cfg, providers } = createAudioConfigWithEcho({ echoTranscript: true });
+    providers.groq.transcribeAudio = async () => {
+      throw new Error("transcription provider failure");
+    };
 
-    mockDeliverOutboundPayloads.mockRejectedValueOnce(new Error("delivery timeout"));
-
-    // Should not throw
     const result = await applyMediaUnderstanding({ ctx, cfg, providers });
 
-    // Transcription itself succeeded
-    expect(result.appliedAudio).toBe(true);
-    expect(ctx.Transcript).toBe("hello world");
-    // Deliver was attempted
-    expect(mockDeliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(result.appliedAudio).toBe(false);
+    expect(ctx.Transcript).toBeUndefined();
   });
 });

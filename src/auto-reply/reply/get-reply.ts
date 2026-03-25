@@ -196,6 +196,23 @@ export async function getReplyFromConfig(
       agentDir,
       activeModel: { provider, model },
     });
+    // Echo transcript to chat. Fires regardless of whether the transcript
+    // came from channel preflight (e.g. Telegram mention-gated voice notes)
+    // or from applyMediaUnderstanding above.
+    const transcript = finalized.Transcript;
+    if (transcript) {
+      const audioCfg = cfg.tools?.media?.audio;
+      if (audioCfg?.echoTranscript) {
+        const { sendTranscriptEcho, DEFAULT_ECHO_TRANSCRIPT_FORMAT } =
+          await import("../../media-understanding/echo-transcript.js");
+        await sendTranscriptEcho({
+          ctx: finalized,
+          cfg,
+          transcript,
+          format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        });
+      }
+    }
     await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,

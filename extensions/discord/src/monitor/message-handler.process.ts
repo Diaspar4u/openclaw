@@ -414,6 +414,7 @@ export async function processDiscordMessage(
     ThreadLabel: threadLabel,
     Timestamp: resolveTimestampMs(message.timestamp),
     ...mediaPayload,
+    Transcript: ctx.transcript,
     CommandAuthorized: commandAuthorized,
     CommandSource: "text" as const,
     // Originating channel for reply routing.
