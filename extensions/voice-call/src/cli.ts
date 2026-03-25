@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { format } from "node:util";
 import type { Command } from "commander";
-import { sleep } from "../api.js";
+import { callGateway, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES, sleep } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -18,14 +16,6 @@ type Logger = {
   warn: (message: string) => void;
   error: (message: string) => void;
 };
-
-function writeStdoutLine(...values: unknown[]): void {
-  process.stdout.write(`${format(...values)}\n`);
-}
-
-function writeStdoutJson(value: unknown): void {
-  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
-}
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
   const raw = input.trim().toLowerCase();
@@ -90,135 +80,185 @@ function summarizeSeries(values: number[]): {
   };
 }
 
-function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
-  return mode === "notify" || mode === "conversation" ? mode : undefined;
+type GatewayRpcOpts = { url?: string; token?: string; password?: string; timeout?: string };
+
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+function parseTimeoutMs(raw?: string): number {
+  const t = Number(raw ?? DEFAULT_TIMEOUT_MS);
+  return Number.isFinite(t) && t > 0 ? t : DEFAULT_TIMEOUT_MS;
 }
 
-async function initiateCallAndPrintId(params: {
-  runtime: VoiceCallRuntime;
-  to: string;
-  message?: string;
-  mode?: string;
-}) {
-  const result = await params.runtime.manager.initiateCall(params.to, undefined, {
-    message: params.message,
-    mode: resolveCallMode(params.mode),
-  });
-  if (!result.success) {
-    throw new Error(result.error || "initiate failed");
+// Voice-call gateway handlers use the 3-arg respond signature
+// (respond(false, undefined, errorShape(...))) so errors surface correctly
+// through GatewayClient. unwrapRpcResult is a safety net for any payload
+// that still carries an error field (e.g. legacy or future handlers).
+async function rpc<T = Record<string, unknown>>(
+  method: string,
+  opts: GatewayRpcOpts,
+  params?: unknown,
+): Promise<T> {
+  try {
+    return await callGateway<T>({
+      url: opts.url,
+      token: opts.token,
+      password: opts.password,
+      method,
+      params,
+      timeoutMs: parseTimeoutMs(opts.timeout),
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("ECONNREFUSED") || msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT")) {
+      throw new Error(
+        `Cannot reach gateway: ${msg}\nIs the gateway running? Start it with: openclaw gateway run`,
+        { cause: err },
+      );
+    }
+    throw err;
   }
-  writeStdoutJson({ callId: result.callId });
+}
+
+function unwrapRpcResult(result: Record<string, unknown>): Record<string, unknown> {
+  if (result.error) {
+    throw new Error(String(result.error));
+  }
+  return result;
+}
+
+function addGatewayOpts(cmd: Command): Command {
+  return cmd
+    .option("--url <url>", "Gateway WebSocket URL")
+    .option("--token <token>", "Gateway token")
+    .option("--password <password>", "Gateway password")
+    .option("--timeout <ms>", "Timeout in ms", "15000");
 }
 
 export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
-  ensureRuntime: () => Promise<VoiceCallRuntime>;
   logger: Logger;
 }) {
-  const { program, config, ensureRuntime, logger } = params;
+  const { program, config, logger } = params;
   const root = program
     .command("voicecall")
     .description("Voice call utilities")
     .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
 
-  root
-    .command("call")
-    .description("Initiate an outbound voice call")
-    .requiredOption("-m, --message <text>", "Message to speak when call connects")
-    .option(
-      "-t, --to <phone>",
-      "Phone number to call (E.164 format, uses config toNumber if not set)",
-    )
-    .option(
-      "--mode <mode>",
-      "Call mode: notify (hangup after message) or conversation (stay open)",
-      "conversation",
-    )
-    .action(async (options: { message: string; to?: string; mode?: string }) => {
-      const rt = await ensureRuntime();
-      const to = options.to ?? rt.config.toNumber;
-      if (!to) {
-        throw new Error("Missing --to and no toNumber configured");
-      }
-      await initiateCallAndPrintId({
-        runtime: rt,
-        to,
-        message: options.message,
-        mode: options.mode,
-      });
-    });
-
-  root
-    .command("start")
-    .description("Alias for voicecall call")
-    .requiredOption("--to <phone>", "Phone number to call")
-    .option("--message <text>", "Message to speak when call connects")
-    .option(
-      "--mode <mode>",
-      "Call mode: notify (hangup after message) or conversation (stay open)",
-      "conversation",
-    )
-    .action(async (options: { to: string; message?: string; mode?: string }) => {
-      const rt = await ensureRuntime();
-      await initiateCallAndPrintId({
-        runtime: rt,
+  addGatewayOpts(
+    root
+      .command("call")
+      .description("Initiate an outbound voice call")
+      .requiredOption("-m, --message <text>", "Message to speak when call connects")
+      .option(
+        "-t, --to <phone>",
+        "Phone number to call (E.164 format, uses config toNumber if not set)",
+      )
+      .option(
+        "--mode <mode>",
+        "Call mode: notify (hangup after message) or conversation (stay open)",
+        "conversation",
+      ),
+  ).action(async (options: GatewayRpcOpts & { message: string; to?: string; mode?: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.initiate", options, {
         to: options.to,
         message: options.message,
         mode: options.mode,
-      });
-    });
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
 
-  root
-    .command("continue")
-    .description("Speak a message and wait for a response")
-    .requiredOption("--call-id <id>", "Call ID")
-    .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) => {
-      const rt = await ensureRuntime();
-      const result = await rt.manager.continueCall(options.callId, options.message);
-      if (!result.success) {
-        throw new Error(result.error || "continue failed");
-      }
-      writeStdoutJson(result);
-    });
+  addGatewayOpts(
+    root
+      .command("start")
+      .description("Alias for voicecall call")
+      .requiredOption("--to <phone>", "Phone number to call")
+      .option("--message <text>", "Message to speak when call connects")
+      .option(
+        "--mode <mode>",
+        "Call mode: notify (hangup after message) or conversation (stay open)",
+        "conversation",
+      ),
+  ).action(async (options: GatewayRpcOpts & { to: string; message?: string; mode?: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.start", options, {
+        to: options.to,
+        message: options.message,
+        mode: options.mode,
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
 
-  root
-    .command("speak")
-    .description("Speak a message without waiting for response")
-    .requiredOption("--call-id <id>", "Call ID")
-    .requiredOption("--message <text>", "Message to speak")
-    .action(async (options: { callId: string; message: string }) => {
-      const rt = await ensureRuntime();
-      const result = await rt.manager.speak(options.callId, options.message);
-      if (!result.success) {
-        throw new Error(result.error || "speak failed");
-      }
-      writeStdoutJson(result);
-    });
+  addGatewayOpts(
+    root
+      .command("continue")
+      .description("Speak a message and wait for a response")
+      .requiredOption("--call-id <id>", "Call ID")
+      .requiredOption("--message <text>", "Message to speak"),
+  ).action(async (options: GatewayRpcOpts & { callId: string; message: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.continue", options, {
+        callId: options.callId,
+        message: options.message,
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
 
-  root
-    .command("end")
-    .description("Hang up an active call")
-    .requiredOption("--call-id <id>", "Call ID")
-    .action(async (options: { callId: string }) => {
-      const rt = await ensureRuntime();
-      const result = await rt.manager.endCall(options.callId);
-      if (!result.success) {
-        throw new Error(result.error || "end failed");
-      }
-      writeStdoutJson(result);
-    });
+  addGatewayOpts(
+    root
+      .command("speak")
+      .description("Speak a message without waiting for response")
+      .requiredOption("--call-id <id>", "Call ID")
+      .requiredOption("--message <text>", "Message to speak"),
+  ).action(async (options: GatewayRpcOpts & { callId: string; message: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.speak", options, {
+        callId: options.callId,
+        message: options.message,
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
 
-  root
-    .command("status")
-    .description("Show call status")
-    .requiredOption("--call-id <id>", "Call ID")
-    .action(async (options: { callId: string }) => {
-      const rt = await ensureRuntime();
-      const call = rt.manager.getCall(options.callId);
-      writeStdoutJson(call ?? { found: false });
-    });
+  addGatewayOpts(
+    root
+      .command("end")
+      .description("Hang up an active call")
+      .requiredOption("--call-id <id>", "Call ID"),
+  ).action(async (options: GatewayRpcOpts & { callId: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.end", options, {
+        callId: options.callId,
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
+
+  addGatewayOpts(
+    root
+      .command("status")
+      .description("Show call status")
+      .requiredOption("--call-id <id>", "Call ID"),
+  ).action(async (options: GatewayRpcOpts & { callId: string }) => {
+    const result = unwrapRpcResult(
+      await rpc("voicecall.status", options, {
+        callId: options.callId,
+      }),
+    );
+    // eslint-disable-next-line no-console
+    console.log(JSON.stringify(result, null, 2));
+  });
 
   root
     .command("tail")
@@ -239,7 +279,8 @@ export function registerVoiceCallCli(params: {
       const initial = fs.readFileSync(file, "utf8");
       const lines = initial.split("\n").filter(Boolean);
       for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        writeStdoutLine(line);
+        // eslint-disable-next-line no-console
+        console.log(line);
       }
 
       let offset = Buffer.byteLength(initial, "utf8");
@@ -258,7 +299,8 @@ export function registerVoiceCallCli(params: {
               offset = stat.size;
               const text = buf.toString("utf8");
               for (const line of text.split("\n").filter(Boolean)) {
-                writeStdoutLine(line);
+                // eslint-disable-next-line no-console
+                console.log(line);
               }
             } finally {
               fs.closeSync(fd);
@@ -308,11 +350,18 @@ export function registerVoiceCallCli(params: {
         }
       }
 
-      writeStdoutJson({
-        recordsScanned: lines.length,
-        turnLatency: summarizeSeries(turnLatencyMs),
-        listenWait: summarizeSeries(listenWaitMs),
-      });
+      // eslint-disable-next-line no-console
+      console.log(
+        JSON.stringify(
+          {
+            recordsScanned: lines.length,
+            turnLatency: summarizeSeries(turnLatencyMs),
+            listenWait: summarizeSeries(listenWaitMs),
+          },
+          null,
+          2,
+        ),
+      );
     });
 
   root
@@ -334,7 +383,8 @@ export function registerVoiceCallCli(params: {
         if (mode === "off") {
           await cleanupTailscaleExposureRoute({ mode: "serve", path: tsPath });
           await cleanupTailscaleExposureRoute({ mode: "funnel", path: tsPath });
-          writeStdoutJson({ ok: true, mode: "off", path: tsPath });
+          // eslint-disable-next-line no-console
+          console.log(JSON.stringify({ ok: true, mode: "off", path: tsPath }, null, 2));
           return;
         }
 
@@ -349,19 +399,26 @@ export function registerVoiceCallCli(params: {
           ? `https://login.tailscale.com/f/${mode}?node=${tsInfo.nodeId}`
           : null;
 
-        writeStdoutJson({
-          ok: Boolean(publicUrl),
-          mode,
-          path: tsPath,
-          localUrl,
-          publicUrl,
-          hint: publicUrl
-            ? undefined
-            : {
-                note: "Tailscale serve/funnel may be disabled on this tailnet (or require admin enable).",
-                enableUrl,
-              },
-        });
+        // eslint-disable-next-line no-console
+        console.log(
+          JSON.stringify(
+            {
+              ok: Boolean(publicUrl),
+              mode,
+              path: tsPath,
+              localUrl,
+              publicUrl,
+              hint: publicUrl
+                ? undefined
+                : {
+                    note: "Tailscale serve/funnel may be disabled on this tailnet (or require admin enable).",
+                    enableUrl,
+                  },
+            },
+            null,
+            2,
+          ),
+        );
       },
     );
 }
