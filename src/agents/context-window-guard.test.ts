@@ -139,6 +139,41 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("explicit modelsConfig contextWindow wins over contextTokens cap", () => {
+    const cfg = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "x",
+            models: [
+              {
+                id: "claude-opus-4-6",
+                name: "Claude Opus 4.6",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+                contextWindow: 1_000_000,
+                maxTokens: 32_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: { defaults: { contextTokens: 200_000 } },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelContextWindow: 500_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(1_000_000);
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },

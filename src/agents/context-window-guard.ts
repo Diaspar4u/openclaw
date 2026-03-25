@@ -42,8 +42,12 @@ export function resolveContextWindowInfo(params: {
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
 
+  // agents.defaults.contextTokens acts as a fallback cap for models without an
+  // explicit contextWindow in modelsConfig. When the operator explicitly configures
+  // a model's contextWindow via modelsConfig, that value takes precedence — the
+  // operator deliberately chose that context size for that model.
   const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (capTokens && capTokens < baseInfo.tokens) {
+  if (capTokens && capTokens < baseInfo.tokens && baseInfo.source !== "modelsConfig") {
     return { tokens: capTokens, source: "agentContextTokens" };
   }
 
