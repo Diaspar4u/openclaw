@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveSessionStoreDir } from "./store.js";
 
 export type SessionStoreSelectionOptions = {
   store?: string;
@@ -73,6 +74,18 @@ function resolveValidatedDiscoveredStorePathSync(params: {
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
+      // sessions.json missing — check for migrated directory store (sessions.d).
+      // Return the virtual storePath so callers can pass it to loadSessionStore(),
+      // which detects the sibling sessions.d directory automatically.
+      try {
+        const dirStore = resolveSessionStoreDir(storePath);
+        const dirStat = fsSync.statSync(dirStore);
+        if (dirStat.isDirectory()) {
+          return storePath;
+        }
+      } catch {
+        // sessions.d also missing — genuinely no store here.
+      }
       return undefined;
     }
     throw err;
@@ -95,6 +108,18 @@ async function resolveValidatedDiscoveredStorePath(params: {
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
+      // sessions.json missing — check for migrated directory store (sessions.d).
+      // Return the virtual storePath so callers can pass it to loadSessionStore(),
+      // which detects the sibling sessions.d directory automatically.
+      try {
+        const dirStore = resolveSessionStoreDir(storePath);
+        const dirStat = await fs.stat(dirStore);
+        if (dirStat.isDirectory()) {
+          return storePath;
+        }
+      } catch {
+        // sessions.d also missing — genuinely no store here.
+      }
       return undefined;
     }
     throw err;
