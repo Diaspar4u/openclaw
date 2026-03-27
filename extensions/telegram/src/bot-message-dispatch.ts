@@ -921,8 +921,8 @@ export const dispatchTelegramMessage = async ({
   const hasFinalResponse = queuedFinal || sentFallback || sentRealMessage;
 
   if (statusReactionController && !hasFinalResponse) {
-    void statusReactionController.setError().catch((err) => {
-      logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
+    void statusReactionController.clear().catch((err) => {
+      logVerbose(`telegram: status reaction clear (no response) failed: ${String(err)}`);
     });
   }
 

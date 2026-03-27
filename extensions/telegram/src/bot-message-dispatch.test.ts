@@ -2542,6 +2542,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(finalTextSentViaDeliverReplies).toBe(true);
   });
 
+  it("calls statusReactionController.clear() on no-response instead of setError", async () => {
+    const statusReactionController = {
+      setThinking: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setQueued: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    };
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: false });
+
+    await dispatchWithContext({
+      context: createContext({ statusReactionController: statusReactionController as never }),
+    });
+
+    expect(statusReactionController.clear).toHaveBeenCalledTimes(1);
+    expect(statusReactionController.setError).not.toHaveBeenCalled();
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
