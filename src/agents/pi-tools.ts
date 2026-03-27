@@ -1,7 +1,8 @@
 import { codingTools, createReadTool, readTool } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import type { TelegramCapabilitiesConfig } from "../config/types.telegram.js";
+import type { MutationGateConfig, ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -206,6 +207,53 @@ export function resolveToolLoopDetectionConfig(params: {
       ...agent.detectors,
     },
   };
+}
+
+export function resolveMutationGateConfig(params: {
+  cfg?: OpenClawConfig;
+  agentId?: string;
+}): MutationGateConfig | undefined {
+  const global = params.cfg?.tools?.mutationGate;
+  const agent =
+    params.agentId && params.cfg
+      ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.mutationGate
+      : undefined;
+
+  if (!agent) {
+    return global;
+  }
+  if (!global) {
+    return agent;
+  }
+
+  return {
+    enabled: agent.enabled ?? global.enabled,
+    extraMutations: [
+      ...new Set([...(global.extraMutations ?? []), ...(agent.extraMutations ?? [])]),
+    ],
+    channels: [...new Set([...(global.channels ?? []), ...(agent.channels ?? [])])],
+  };
+}
+
+/**
+ * Check if Telegram inline buttons are globally disabled in config.
+ * Returns `false` when buttons are "off", `undefined` otherwise
+ * (gate continues to enforce since buttons may be available in some scope).
+ */
+function resolveTelegramHasInlineButtons(
+  capabilities: TelegramCapabilitiesConfig | undefined,
+): boolean | undefined {
+  if (!capabilities) {
+    return undefined; // default = allowlist = available
+  }
+  if (Array.isArray(capabilities)) {
+    const hasButtons = capabilities.some((e) => String(e).trim().toLowerCase() === "inlinebuttons");
+    return hasButtons ? undefined : false;
+  }
+  if (capabilities.inlineButtons === "off") {
+    return false;
+  }
+  return undefined; // dm, group, all, allowlist — buttons exist in some scope
 }
 
 export const __testing = {
@@ -642,6 +690,17 @@ export function createOpenClawCodingTools(options?: {
       modelCompat: options?.modelCompat,
     }),
   );
+  // Detect whether the message tool survived policy filtering — if not, the
+  // mutation gate cannot send approval-request messages and must skip enforcement
+  // to avoid deadlocking the agent.
+  const hasMessageTool = normalized.some((t) => t.name === "message");
+  // Check if the channel's inline buttons are globally disabled.  When buttons
+  // are "off", gating would deadlock the agent — no way to present approval.
+  const channel = options?.messageProvider?.trim().toLowerCase();
+  const hasInlineButtons =
+    channel === "telegram"
+      ? resolveTelegramHasInlineButtons(options?.config?.channels?.telegram?.capabilities)
+      : undefined;
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
@@ -649,6 +708,10 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      mutationGate: resolveMutationGateConfig({ cfg: options?.config, agentId }),
+      agentWorkspace: workspaceRoot,
+      hasInlineButtons,
+      hasMessageTool,
     }),
   );
   const withAbort = options?.abortSignal

@@ -75,6 +75,10 @@
       "types": "./dist/plugin-sdk/setup.d.ts",
       "default": "./dist/plugin-sdk/setup.js"
     },
+    "./plugin-sdk/mutation-gate": {
+      "types": "./dist/plugin-sdk/mutation-gate.d.ts",
+      "default": "./dist/plugin-sdk/mutation-gate.js"
+    },
     "./plugin-sdk/setup-adapter-runtime": {
       "types": "./dist/plugin-sdk/setup-adapter-runtime.d.ts",
       "default": "./dist/plugin-sdk/setup-adapter-runtime.js"

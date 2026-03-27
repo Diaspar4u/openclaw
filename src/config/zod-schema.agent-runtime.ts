@@ -570,6 +570,14 @@ export const AgentToolsSchema = z
       })
       .strict()
       .optional(),
+    mutationGate: z
+      .object({
+        enabled: z.boolean().optional(),
+        extraMutations: z.array(z.string()).optional(),
+        channels: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
@@ -866,6 +874,14 @@ export const ToolsSchema = z
       .object({
         enabled: z.boolean().optional(),
         allowFrom: ElevatedAllowFromSchema,
+      })
+      .strict()
+      .optional(),
+    mutationGate: z
+      .object({
+        enabled: z.boolean().optional(),
+        extraMutations: z.array(z.string()).optional(),
+        channels: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),

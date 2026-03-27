@@ -310,6 +310,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Mutation approval gate — blocks write/exec tools unless user clicks approval button. */
+  mutationGate?: MutationGateConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -318,6 +320,15 @@ export type AgentToolsConfig = {
       deny?: string[];
     };
   };
+};
+
+export type MutationGateConfig = {
+  /** Enable mutation gate (default: false). */
+  enabled?: boolean;
+  /** Extra tools that require approval, added on top of the built-in defaults. */
+  extraMutations?: string[];
+  /** Channels where the gate is enforced (default: ["telegram"]). Only channels with inline-button support should be listed. */
+  channels?: string[];
 };
 
 export type MemorySearchConfig = {
@@ -620,6 +631,8 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Mutation approval gate — blocks write/exec tools unless user clicks approval button. */
+  mutationGate?: MutationGateConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */

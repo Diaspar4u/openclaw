@@ -4717,6 +4717,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       additionalProperties: false,
                     },
+                    mutationGate: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        extraMutations: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        channels: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                     exec: {
                       type: "object",
                       properties: {
@@ -6859,6 +6880,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+          mutationGate: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              extraMutations: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              channels: {
+                type: "array",
+                items: {
+                  type: "string",
                 },
               },
             },

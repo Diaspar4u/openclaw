@@ -32,6 +32,10 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
+import {
+  OCG_APPROVE_CALLBACK_DATA,
+  recordMutationApproval,
+} from "openclaw/plugin-sdk/mutation-gate";
 import { dispatchPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
@@ -39,6 +43,7 @@ import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   isSenderAllowed,
+  normalizeAllowFrom,
   normalizeDmAllowFromWithStore,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
@@ -1582,6 +1587,44 @@ export const registerTelegramHandlers = ({
           return;
         }
 
+        return;
+      }
+
+      // Mutation gate approval callback
+      if (data === OCG_APPROVE_CALLBACK_DATA) {
+        const { sessionKey, sessionEntry } = resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          isForum,
+          messageThreadId,
+          resolvedThreadId,
+          senderId,
+        });
+        // Validate sender is in ownerAllowFrom (global config).
+        // When ownerAllowFrom is not configured, reject — open approval is not safe.
+        const normalizedOwner = normalizeAllowFrom(cfg.commands?.ownerAllowFrom);
+        if (!normalizedOwner.hasEntries || !isSenderAllowed({ allow: normalizedOwner, senderId })) {
+          try {
+            await editCallbackMessage("\u274c Not authorized to approve mutations.");
+          } catch (editErr) {
+            const errStr = String(editErr);
+            if (!errStr.includes("message is not modified")) {
+              logVerbose(`mutation gate: failed to edit rejection message: ${errStr}`);
+            }
+          }
+          return;
+        }
+        recordMutationApproval(sessionKey, senderId, sessionEntry?.sessionId);
+        try {
+          await editCallbackMessage("\u2705 Approved");
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (!errStr.includes("message is not modified")) {
+            logVerbose(`mutation gate: failed to edit approval message: ${errStr}`);
+          }
+        }
+        // Approval recorded — do not fall through to processMessage.
+        // The agent will consume the approval on its next mutation tool call.
         return;
       }
 
