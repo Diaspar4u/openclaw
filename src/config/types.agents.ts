@@ -64,6 +64,10 @@ export type AgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  /** Absolute path to a sandbox-specific shared bootstrap directory.
+   *  When set, only top-level SHARED_*.md from the global shared dir
+   *  plus SHARED_*.md from this path are loaded (two-tier isolation). */
+  sharedBootstrapPath?: string;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
