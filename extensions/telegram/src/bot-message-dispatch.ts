@@ -972,9 +972,19 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    void statusReactionController.setDone().catch((err) => {
-      logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
-    });
+    // Intentionally skip the done-emoji flash on Telegram: unlike Discord (which
+    // shows done for doneHoldMs then clears), Telegram clears immediately because
+    // the reply itself serves as confirmation. emojis.done / doneHoldMs are unused
+    // on this path by design.
+    if (removeAckAfterReply) {
+      void statusReactionController.clear().catch((err) => {
+        logVerbose(`telegram: status reaction clear failed: ${String(err)}`);
+      });
+    } else {
+      void statusReactionController.restoreInitial().catch((err) => {
+        logVerbose(`telegram: status reaction restore failed: ${String(err)}`);
+      });
+    }
   } else {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
