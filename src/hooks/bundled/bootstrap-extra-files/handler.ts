@@ -61,10 +61,12 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     if (extras.length === 0) {
       return;
     }
-    context.bootstrapFiles = filterBootstrapFilesForSession(
-      [...context.bootstrapFiles, ...extras],
-      context.sessionKey,
-    );
+    // Only filter the new extras — preserve files already in context
+    // (e.g. shared-bootstrap files that must survive subagent/cron filtering).
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      ...filterBootstrapFilesForSession(extras, context.sessionKey),
+    ];
   } catch (err) {
     log.warn(`failed: ${String(err)}`);
   }

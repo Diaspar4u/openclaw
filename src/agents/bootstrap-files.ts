@@ -82,7 +82,7 @@ export async function resolveBootstrapFilesForRun(params: {
     files: filterBootstrapFilesForSession(rawFiles, sessionKey),
     contextMode: params.contextMode,
     runKind: params.runKind,
-  });
+  }).map((f) => ({ ...f }));
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
