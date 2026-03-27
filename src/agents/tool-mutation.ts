@@ -31,6 +31,10 @@ const READ_ONLY_ACTIONS = new Set([
   "probe",
 ]);
 
+// Gateway uses dotted action names (e.g. "config.get") that don't match
+// bare verbs in READ_ONLY_ACTIONS. Enumerate the read-only ones explicitly.
+const GATEWAY_READ_ONLY_ACTIONS = new Set(["config.get", "config.schema", "config.schema.lookup"]);
+
 const PROCESS_MUTATING_ACTIONS = new Set(["write", "send_keys", "submit", "paste", "kill"]);
 
 const MESSAGE_MUTATING_ACTIONS = new Set([
@@ -136,7 +140,14 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
     case "session_status":
       return typeof record?.model === "string" && record.model.trim().length > 0;
     default: {
-      if (normalized === "cron" || normalized === "gateway" || normalized === "canvas") {
+      if (normalized === "gateway") {
+        // Fail-closed: only explicitly listed dotted actions are read-only.
+        // Do NOT fall through to READ_ONLY_ACTIONS — bare-verb matches
+        // (e.g. a hypothetical "status" gateway action) must be added to
+        // GATEWAY_READ_ONLY_ACTIONS to be treated as non-mutating.
+        return !(action != null && GATEWAY_READ_ONLY_ACTIONS.has(action));
+      }
+      if (normalized === "cron" || normalized === "canvas") {
         return action == null || !READ_ONLY_ACTIONS.has(action);
       }
       if (normalized === "nodes") {

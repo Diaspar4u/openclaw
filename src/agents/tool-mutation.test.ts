@@ -81,6 +81,33 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("classifies gateway dotted actions as read-only or mutating", () => {
+    // Read-only gateway actions
+    expect(isMutatingToolCall("gateway", { action: "config.get" })).toBe(false);
+    expect(isMutatingToolCall("gateway", { action: "config.schema" })).toBe(false);
+    expect(isMutatingToolCall("gateway", { action: "config.schema.lookup" })).toBe(false);
+
+    // Mutating gateway actions
+    expect(isMutatingToolCall("gateway", { action: "restart" })).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "config.apply" })).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "config.patch" })).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "update.run" })).toBe(true);
+
+    // Fail-closed: no action, unknown action, or bare verbs not in GATEWAY_READ_ONLY_ACTIONS
+    expect(isMutatingToolCall("gateway", {})).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "unknown.thing" })).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "list" })).toBe(true);
+    expect(isMutatingToolCall("gateway", { action: "status" })).toBe(true);
+
+    // Fingerprint: read-only gateway calls produce no fingerprint
+    expect(buildToolActionFingerprint("gateway", { action: "config.get" })).toBeUndefined();
+
+    // Cron/canvas still use only READ_ONLY_ACTIONS (unchanged behavior)
+    expect(isMutatingToolCall("cron", { action: "list" })).toBe(false);
+    expect(isMutatingToolCall("cron", { action: "config.get" })).toBe(true);
+    expect(isMutatingToolCall("canvas", { action: "get" })).toBe(false);
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
