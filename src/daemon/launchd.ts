@@ -451,11 +451,18 @@ function isUnsupportedGuiDomain(detail: string): boolean {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+  const serviceTarget = `${domain}/${label}`;
+  // Disable the service so KeepAlive doesn't restart it, then kill the process.
+  // Unlike bootout, this keeps the service loaded so restart/start work without re-install.
+  const disableRes = await execLaunchctl(["disable", serviceTarget]);
+  if (disableRes.code !== 0 && !isLaunchctlNotLoaded(disableRes)) {
+    throw new Error(`launchctl disable failed: ${disableRes.stderr || disableRes.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  const res = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
+  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
+  }
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 async function writeLaunchAgentPlist({
@@ -583,6 +590,9 @@ export async function restartLaunchAgent({
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
+
+  // Re-enable the service in case a prior `stop` left it disabled (disable persists across boots).
+  await execLaunchctl(["enable", serviceTarget]);
 
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
