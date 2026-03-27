@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -351,7 +352,16 @@ describe("launchd install", () => {
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
-    expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
+    // enable must come before kickstart so a prior `stop` (which disables) is cleared
+    const enableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "enable" && c[1] === serviceId,
+    );
+    const kickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === serviceId,
+    );
+    expect(enableIndex).toBeGreaterThanOrEqual(0);
+    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(enableIndex).toBeLessThan(kickstartIndex);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
@@ -414,7 +424,8 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("launchctl kickstart failed: Input/output error");
 
-    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(false);
+    // enable is always called (clears prior disable from stop), but bootstrap must not trigger
+    expect(state.launchctlCalls.some((call) => call[0] === "enable")).toBe(true);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
   });
 
@@ -465,6 +476,31 @@ describe("launchd install", () => {
         programArguments: defaultProgramArguments,
       }),
     ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+  });
+});
+
+describe("launchd stop", () => {
+  it("stops with disable+kill instead of bootout", async () => {
+    const env = { HOME: "/Users/test" } as Record<string, string | undefined>;
+    const stdout = new PassThrough();
+    state.launchctlCalls = [];
+
+    await stopLaunchAgent({ env, stdout });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const serviceTarget = `${domain}/${label}`;
+
+    const disableIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "disable" && c[1] === serviceTarget,
+    );
+    const killIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kill" && c[1] === "SIGTERM" && c[2] === serviceTarget,
+    );
+    expect(disableIndex).toBeGreaterThanOrEqual(0);
+    expect(killIndex).toBeGreaterThanOrEqual(0);
+    expect(disableIndex).toBeLessThan(killIndex);
+    expect(state.launchctlCalls.some((c) => c[0] === "bootout")).toBe(false);
   });
 });
 
