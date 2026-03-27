@@ -1,0 +1,39 @@
+{
+  "id": "response-validator",
+  "name": "Response Validator",
+  "description": "Gates outbound agent replies with regex checks and Haiku scope/completeness validation before delivery.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable or disable the validator globally (default: true)"
+      },
+      "maxRetries": {
+        "type": "number",
+        "description": "Max retry attempts per blocked response (default: 3)"
+      },
+      "agents": {
+        "type": "object",
+        "description": "Per-agent enable/disable overrides",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Master switch for the response validator"
+    },
+    "maxRetries": {
+      "label": "Max Retries",
+      "help": "How many times a blocked response triggers regeneration before allowing through"
+    }
+  }
+}
