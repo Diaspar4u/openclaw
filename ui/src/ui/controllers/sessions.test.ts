@@ -22,6 +22,7 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    sessionsIncludeKeys: [],
     ...overrides,
   };
 }
