@@ -140,6 +140,11 @@ export const buildTelegramMessageContext = async ({
     !isGroup && groupConfig && "dmPolicy" in groupConfig
       ? (groupConfig.dmPolicy ?? dmPolicy)
       : dmPolicy;
+  const topicName =
+    (msg as { forum_topic_created?: { name?: string } }).forum_topic_created?.name ??
+    (msg as { forum_topic_edited?: { name?: string } }).forum_topic_edited?.name ??
+    (msg as { reply_to_message?: { forum_topic_created?: { name?: string } } }).reply_to_message
+      ?.forum_topic_created?.name;
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const freshCfg = (loadFreshConfig ?? loadConfig)();
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
@@ -488,6 +493,7 @@ export const buildTelegramMessageContext = async ({
     options,
     dmAllowFrom,
     commandAuthorized: bodyResult.commandAuthorized,
+    topicName,
   });
 
   return {

@@ -68,6 +68,7 @@ export async function buildTelegramInboundContextPayload(params: {
   options?: TelegramMessageContextOptions;
   /** Preflight audio transcript from mention-gated voice note transcription. */
   transcript?: string;
+  topicName?: string;
   dmAllowFrom?: Array<string | number>;
 }): Promise<{
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
@@ -100,6 +101,7 @@ export async function buildTelegramInboundContextPayload(params: {
     commandAuthorized,
     locationData,
     options,
+    topicName,
     dmAllowFrom,
   } = params;
   const replyTarget = describeReplyTarget(msg);
@@ -202,6 +204,7 @@ export async function buildTelegramInboundContextPayload(params: {
     ChatType: isGroup ? "group" : "direct",
     ConversationLabel: conversationLabel,
     GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+    TopicName: isForum ? topicName : undefined,
     GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
     SenderName: senderName,
     SenderId: senderId || undefined,

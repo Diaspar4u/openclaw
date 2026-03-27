@@ -1172,6 +1172,7 @@ export function buildGatewaySessionRow(params: {
       ? buildGroupDisplayName({
           provider: channel,
           subject,
+          topicName: entry?.topicName,
           groupChannel,
           space,
           id,
@@ -1374,6 +1375,7 @@ export function listSessionsFromStore(params: {
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
+  const includeKeys = new Set(Array.isArray(opts.includeKeys) ? opts.includeKeys : []);
 
   let sessions = Object.entries(store)
     .filter(([key]) => {
@@ -1435,6 +1437,9 @@ export function listSessionsFromStore(params: {
 
   if (search) {
     sessions = sessions.filter((s) => {
+      if (includeKeys.has(s.key)) {
+        return true;
+      }
       const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
       return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
     });
@@ -1442,12 +1447,21 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    sessions = sessions.filter((s) => includeKeys.has(s.key) || (s.updatedAt ?? 0) >= cutoff);
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    if (includeKeys.size > 0) {
+      const pinned = sessions.filter((s) => includeKeys.has(s.key));
+      sessions = sessions
+        .filter((s) => !includeKeys.has(s.key))
+        .slice(0, limit)
+        .concat(pinned)
+        .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    } else {
+      sessions = sessions.slice(0, limit);
+    }
   }
 
   return {
