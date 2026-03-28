@@ -1639,6 +1639,7 @@ export type PluginHookName =
   | "before_agent_start"
   | "llm_input"
   | "llm_output"
+  | "validate_final_reply"
   | "agent_end"
   | "before_compaction"
   | "after_compaction"
@@ -1667,6 +1668,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_agent_start",
   "llm_input",
   "llm_output",
+  "validate_final_reply",
   "agent_end",
   "before_compaction",
   "after_compaction",
@@ -1835,6 +1837,19 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+};
+
+// validate_final_reply hook
+export type PluginHookValidateFinalReplyEvent = {
+  assistantTexts: string[];
+  userMessage?: string;
+  retryCount: number;
+  maxRetries: number;
+};
+
+export type PluginHookValidateFinalReplyResult = {
+  pass: boolean;
+  reason?: string;
 };
 
 // agent_end hook
@@ -2215,6 +2230,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookLlmOutputEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  validate_final_reply: (
+    event: PluginHookValidateFinalReplyEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookValidateFinalReplyResult | void>
+    | PluginHookValidateFinalReplyResult
+    | void;
   agent_end: (event: PluginHookAgentEndEvent, ctx: PluginHookAgentContext) => Promise<void> | void;
   before_compaction: (
     event: PluginHookBeforeCompactionEvent,
