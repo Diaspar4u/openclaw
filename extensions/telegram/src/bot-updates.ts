@@ -12,6 +12,8 @@ export type MediaGroupEntry = {
     ctx: TelegramContext;
   }>;
   timer: ReturnType<typeof setTimeout>;
+  /** Deferred-work resolvers for webhook queue tracking. */
+  deferredResolvers?: Array<{ resolve: () => void; reject: (err: unknown) => void }>;
 };
 
 export type TelegramUpdateKeyContext = {
