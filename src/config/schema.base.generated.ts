@@ -3336,6 +3336,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 agentDir: {
                   type: "string",
                 },
+                sharedBootstrapPath: {
+                  type: "string",
+                },
                 model: {
                   anyOf: [
                     {
