@@ -479,6 +479,7 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
+  let sentRealMessage = false;
   const sendPayload = async (payload: ReplyPayload) => {
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       ...deliveryBaseOptions,
@@ -488,6 +489,7 @@ export const dispatchTelegramMessage = async ({
       mediaLoader: telegramDeps.loadWebMedia,
     });
     if (result.delivered) {
+      sentRealMessage = true;
       deliveryState.markDelivered();
     }
     return result.delivered;
@@ -881,7 +883,11 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  // sentRealMessage tracks sendPayload() calls that went through deliverReplies,
+  // covering block-streamed sends that bypass queuedFinal. Unlike
+  // deliverySummary.delivered, it excludes transient preview edits that may be
+  // deleted during cleanup.
+  const hasFinalResponse = queuedFinal || sentFallback || sentRealMessage;
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
