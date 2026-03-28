@@ -2,7 +2,12 @@ import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
-import { chunkAudio } from "../telephony-audio.js";
+import {
+  chunkAudio,
+  convertPcmChunkToMulaw8k,
+  createPcmToMulawStreamState,
+  flushPcmToMulawStream,
+} from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
 import type {
   GetCallStatusInput,
@@ -34,6 +39,20 @@ import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 type StreamSendResult = {
   sent: boolean;
 };
+
+/**
+ * Thrown when TTS streaming fails after audio frames have already been sent.
+ * Must NOT fall back to TwiML <Say> (would cause garbled/duplicated audio).
+ */
+export class PartialPlaybackError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `TTS streaming failed after partial playback: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause: cause instanceof Error ? cause : new Error(String(cause)) },
+    );
+    this.name = "PartialPlaybackError";
+  }
+}
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -578,7 +597,7 @@ export class TwilioProvider implements VoiceCallProvider {
    *    If telephony TTS is unavailable in that state, playback fails rather than mixing paths.
    * 2. TwiML <Say>: fallback only when there is no active stream for the call.
    */
-  async playTts(input: PlayTtsInput): Promise<void> {
+  async playTts(input: PlayTtsInput): Promise<void | { partial?: boolean }> {
     const streamSid = this.callStreamMap.get(input.providerCallId);
     if (streamSid) {
       if (!this.ttsProvider || !this.mediaStreamHandler) {
@@ -588,9 +607,13 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       try {
-        await this.playTtsViaStream(input.text, streamSid);
-        return;
+        return await this.playTtsViaStream(input.text, streamSid);
       } catch (err) {
+        // Frames already sent — falling back to <Say> would garble audio.
+        // Let the caller (speakStream) handle it as a failure.
+        if (err instanceof PartialPlaybackError) {
+          throw err;
+        }
         console.warn(
           `[voice-call] Telephony TTS failed:`,
           err instanceof Error ? err.message : err,
@@ -625,10 +648,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /**
    * Play TTS via core TTS and Twilio Media Streams.
-   * Generates audio with core TTS, converts to mu-law, and streams via WebSocket.
+   * Tries streaming first (lower latency), falls back to buffered synthesis.
    * Uses a queue to serialize playback and prevent overlapping audio.
    */
-  private async playTtsViaStream(text: string, streamSid: string): Promise<void> {
+  private async playTtsViaStream(text: string, streamSid: string): Promise<{ partial?: boolean }> {
     if (!this.ttsProvider || !this.mediaStreamHandler) {
       throw new Error("TTS provider and media stream handler required");
     }
@@ -669,6 +692,95 @@ export class TwilioProvider implements VoiceCallProvider {
       return normalizeSendResult(raw);
     };
 
+    // Try streaming path first (lower latency)
+    if (ttsProvider.synthesizeForTelephonyStream) {
+      const streamSynth = ttsProvider.synthesizeForTelephonyStream;
+      let framesEmitted = false;
+      let aborted = false;
+      try {
+        await handler.queueTts(streamSid, async (signal) => {
+          // Start synthesis inside the queue callback so OpenAI timeout
+          // doesn't count queue-wait time behind earlier playback
+          const streamResult = await streamSynth(text);
+          // Check signal after await — it can fire during the HTTP handshake
+          // before the listener below is attached (AbortSignal race).
+          if (signal.aborted) {
+            streamResult.cleanup();
+            aborted = true;
+            return;
+          }
+          const state = createPcmToMulawStreamState();
+          const onAbort = () => streamResult.stream.destroy();
+          signal.addEventListener("abort", onAbort, { once: true });
+
+          // Buffer mu-law bytes across network chunks so short tail frames
+          // from non-aligned chunks don't each incur a full 20ms delay
+          let mulawCarry = Buffer.alloc(0);
+
+          try {
+            for await (const chunk of streamResult.stream) {
+              if (signal.aborted) break;
+              const pcmChunk = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+              const mulaw = convertPcmChunkToMulaw8k(pcmChunk, streamResult.sampleRate, state);
+              if (mulaw.length === 0) continue;
+
+              const combined = mulawCarry.length > 0 ? Buffer.concat([mulawCarry, mulaw]) : mulaw;
+              const fullFrameBytes = Math.floor(combined.length / CHUNK_SIZE) * CHUNK_SIZE;
+              mulawCarry =
+                fullFrameBytes < combined.length
+                  ? Buffer.from(combined.subarray(fullFrameBytes))
+                  : Buffer.alloc(0);
+
+              for (let offset = 0; offset < fullFrameBytes; offset += CHUNK_SIZE) {
+                if (signal.aborted) break;
+                handler.sendAudio(streamSid, combined.subarray(offset, offset + CHUNK_SIZE));
+                framesEmitted = true;
+                await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+                if (signal.aborted) break;
+              }
+            }
+
+            if (signal.aborted) {
+              aborted = true;
+            } else {
+              // Send any remaining buffered mu-law bytes as a final short frame
+              if (mulawCarry.length > 0) {
+                handler.sendAudio(streamSid, mulawCarry);
+                framesEmitted = true;
+              }
+              const flushedMulaw = flushPcmToMulawStream(state, streamResult.sampleRate);
+              if (flushedMulaw.length > 0) {
+                handler.sendAudio(streamSid, flushedMulaw);
+                framesEmitted = true;
+              }
+              handler.sendMark(streamSid, `tts-${Date.now()}`);
+            }
+          } finally {
+            if (signal.aborted) aborted = true;
+            signal.removeEventListener("abort", onAbort);
+            streamResult.cleanup();
+          }
+        });
+        // Barge-in aborted playback: signal callers to stop remaining sentences
+        if (aborted) {
+          return { partial: true };
+        }
+        return {};
+      } catch (err) {
+        // Only fall back to buffered if no frames were sent yet —
+        // replaying after partial playback causes garbled/duplicated speech
+        if (framesEmitted) {
+          throw new PartialPlaybackError(err);
+        }
+        console.warn(
+          "[voice-call] TTS streaming failed, falling back to buffered:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
+
+    // Buffered fallback
+    let bufferedAborted = false;
     await handler.queueTts(streamSid, async (signal) => {
       const sendKeepAlive = () => {
         sendAudioChunk(SILENCE_CHUNK);
@@ -726,23 +838,28 @@ export class TwilioProvider implements VoiceCallProvider {
         }
       }
 
-      let markSent = true;
-      if (!signal.aborted) {
+      if (signal.aborted) {
+        bufferedAborted = true;
+      } else {
         // Send a mark to track when audio finishes
-        markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
-      }
+        const markSent = sendPlaybackMark(`tts-${Date.now()}`).sent;
 
-      if (!signal.aborted && chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
-        const failures: string[] = [];
-        if (chunkDelivered === 0) {
-          failures.push("no audio chunks delivered");
+        if (chunkAttempts > 0 && (chunkDelivered === 0 || !markSent)) {
+          const failures: string[] = [];
+          if (chunkDelivered === 0) {
+            failures.push("no audio chunks delivered");
+          }
+          if (!markSent) {
+            failures.push("completion mark not delivered");
+          }
+          throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
         }
-        if (!markSent) {
-          failures.push("completion mark not delivered");
-        }
-        throw new Error(`Telephony stream playback failed: ${failures.join("; ")}`);
       }
     });
+    if (bufferedAborted) {
+      return { partial: true };
+    }
+    return {};
   }
 
   /**

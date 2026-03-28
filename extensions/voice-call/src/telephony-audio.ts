@@ -2,6 +2,12 @@ const TELEPHONY_SAMPLE_RATE = 8000;
 const RESAMPLE_FILTER_TAPS = 31;
 const RESAMPLE_CUTOFF_GUARD = 0.94;
 
+function assertValidSampleRate(rate: number): void {
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new Error(`Invalid sample rate: ${rate} (must be a positive finite number)`);
+  }
+}
+
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
 }
@@ -110,6 +116,174 @@ export function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, vo
       yield audio.subarray(i, Math.min(i + chunkSize, audio.length));
     }
   })();
+}
+
+/**
+ * State for incremental PCM-to-mulaw conversion across chunk boundaries.
+ * Tracks a leftover byte when a 16-bit sample straddles two chunks.
+ */
+export type PcmToMulawStreamState = {
+  leftover: Buffer | null;
+  /** Deferred tail samples from interpolation boundary (separate from odd-byte leftover) */
+  interpLeftover: Buffer | null;
+  /** Fractional source position carried across chunks for resampling continuity */
+  srcPosCarry: number;
+};
+
+export function createPcmToMulawStreamState(): PcmToMulawStreamState {
+  return { leftover: null, interpLeftover: null, srcPosCarry: 0 };
+}
+
+/**
+ * Convert an incremental PCM chunk to 8kHz mu-law, handling split 16-bit samples
+ * across chunk boundaries via the state's leftover byte.
+ */
+export function convertPcmChunkToMulaw8k(
+  chunk: Buffer,
+  inputSampleRate: number,
+  state: PcmToMulawStreamState,
+): Buffer {
+  assertValidSampleRate(inputSampleRate);
+  let pcm: Buffer;
+  // Prepend interpolation-deferred samples first, then any odd-byte leftover
+  const prefixes: Buffer[] = [];
+  if (state.interpLeftover) {
+    prefixes.push(state.interpLeftover);
+    state.interpLeftover = null;
+  }
+  if (state.leftover) {
+    prefixes.push(state.leftover);
+    state.leftover = null;
+  }
+  if (prefixes.length > 0) {
+    pcm = Buffer.concat([...prefixes, chunk]);
+  } else {
+    pcm = chunk;
+  }
+
+  // If odd number of bytes, stash the last byte for next chunk
+  if (pcm.length % 2 !== 0) {
+    state.leftover = Buffer.from([pcm[pcm.length - 1]]);
+    pcm = pcm.subarray(0, pcm.length - 1);
+  }
+
+  if (pcm.length === 0) {
+    return Buffer.alloc(0);
+  }
+
+  // No resampling needed — delegate directly
+  if (inputSampleRate === TELEPHONY_SAMPLE_RATE) {
+    return pcmToMulaw(pcm);
+  }
+
+  // Stateful resampling: continue interpolation from where previous chunk left off
+  const inputSamples = Math.floor(pcm.length / 2);
+  const ratio = inputSampleRate / TELEPHONY_SAMPLE_RATE;
+
+  const outputSamples: number[] = [];
+  let srcPos = state.srcPosCarry;
+  let brokeForInterp = false;
+
+  while (srcPos < inputSamples) {
+    const srcIndex = Math.floor(srcPos);
+    const frac = srcPos - srcIndex;
+
+    // Defer to next chunk when interpolation needs a neighbor beyond this chunk,
+    // preventing clamped s1 which causes overproduction and audio artifacts
+    if (srcIndex + 1 >= inputSamples && frac > 1e-10) {
+      const tailStart = srcIndex * 2;
+      const tail = pcm.subarray(tailStart);
+      state.interpLeftover = Buffer.from(tail);
+      state.srcPosCarry = frac;
+      brokeForInterp = true;
+      break;
+    }
+
+    const s0 = pcm.readInt16LE(srcIndex * 2);
+    const s1Index = Math.min(srcIndex + 1, inputSamples - 1);
+    const s1 = pcm.readInt16LE(s1Index * 2);
+    const sample = Math.round(s0 + frac * (s1 - s0));
+    outputSamples.push(clamp16(sample));
+    srcPos += ratio;
+  }
+
+  if (!brokeForInterp) {
+    // srcPos - inputSamples yields the fractional overshoot into the next chunk.
+    // A carry of 0 when srcPos lands exactly on inputSamples is correct: the next
+    // chunk should start at position 0, matching single-pass resamplePcmTo8k behavior.
+    // No duplicate boundary sample is produced because the while loop exits before
+    // emitting a sample at srcPos == inputSamples.
+    state.srcPosCarry = srcPos - inputSamples;
+  }
+
+  if (outputSamples.length === 0) {
+    return Buffer.alloc(0);
+  }
+
+  const resampled = Buffer.alloc(outputSamples.length * 2);
+  for (let i = 0; i < outputSamples.length; i++) {
+    resampled.writeInt16LE(outputSamples[i], i * 2);
+  }
+
+  return pcmToMulaw(resampled);
+}
+
+/**
+ * Flush any remaining state at end-of-stream.
+ * Processes deferred interpolation samples using clamped interpolation (last
+ * sample repeats as its own neighbor), then discards any odd-byte leftover.
+ */
+export function flushPcmToMulawStream(
+  state: PcmToMulawStreamState,
+  inputSampleRate = TELEPHONY_SAMPLE_RATE,
+): Buffer {
+  assertValidSampleRate(inputSampleRate);
+  const interp = state.interpLeftover;
+  state.interpLeftover = null;
+  state.leftover = null;
+
+  if (!interp || interp.length < 2) {
+    return Buffer.alloc(0);
+  }
+
+  // No resampling needed — emit directly
+  if (inputSampleRate === TELEPHONY_SAMPLE_RATE) {
+    // Trim to whole samples
+    const usable = interp.subarray(0, Math.floor(interp.length / 2) * 2);
+    return usable.length > 0 ? pcmToMulaw(usable) : Buffer.alloc(0);
+  }
+
+  // Resample deferred tail samples with clamped interpolation, using the
+  // same while-loop as resamplePcmTo8k so flush + chunk output matches
+  // the single-pass total exactly.
+  const inputSamples = Math.floor(interp.length / 2);
+  const ratio = inputSampleRate / TELEPHONY_SAMPLE_RATE;
+  const outputSamples: number[] = [];
+  let srcPos = state.srcPosCarry;
+
+  while (srcPos < inputSamples) {
+    const srcIndex = Math.floor(srcPos);
+    const frac = srcPos - srcIndex;
+    const s0 = interp.readInt16LE(srcIndex * 2);
+    const s1Index = Math.min(srcIndex + 1, inputSamples - 1);
+    const s1 = interp.readInt16LE(s1Index * 2);
+    const sample = Math.round(s0 + frac * (s1 - s0));
+    outputSamples.push(clamp16(sample));
+    srcPos += ratio;
+  }
+
+  state.srcPosCarry = 0;
+
+  if (outputSamples.length === 0) {
+    return Buffer.alloc(0);
+  }
+
+  const resampled = Buffer.alloc(outputSamples.length * 2);
+  for (let i = 0; i < outputSamples.length; i++) {
+    resampled.writeInt16LE(outputSamples[i], i * 2);
+  }
+
+  return pcmToMulaw(resampled);
 }
 
 function linearToMulaw(sample: number): number {

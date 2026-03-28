@@ -34,6 +34,7 @@ function createRuntimeTts(): PluginRuntime["tts"] {
   return {
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechTelephony: bindTtsRuntime((runtime) => runtime.textToSpeechTelephony),
+    textToSpeechTelephonyStream: bindTtsRuntime((runtime) => runtime.textToSpeechTelephonyStream),
     listVoices: bindTtsRuntime((runtime) => runtime.listSpeechVoices),
   };
 }
