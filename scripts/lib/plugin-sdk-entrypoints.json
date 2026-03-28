@@ -149,6 +149,7 @@
   "twitch",
   "webhook-ingress",
   "webhook-path",
+  "webhook-queue",
   "web-media",
   "voice-call",
   "whatsapp-core",
