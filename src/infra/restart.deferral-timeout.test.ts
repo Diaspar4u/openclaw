@@ -25,6 +25,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     // Always return 1 pending item to prevent draining
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 1,
+      maxWaitMs: 300_000,
       hooks,
     });
 
@@ -71,6 +72,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     deferGatewayRestartUntilIdle({
       getPendingCount: () => pending,
+      maxWaitMs: 300_000,
       hooks,
     });
 
@@ -92,6 +94,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
 
     deferGatewayRestartUntilIdle({
       getPendingCount: () => 0,
+      maxWaitMs: 300_000,
       hooks,
     });
 
@@ -110,6 +113,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       getPendingCount: () => {
         throw new Error("store corrupted");
       },
+      maxWaitMs: 300_000,
       hooks,
     });
 
