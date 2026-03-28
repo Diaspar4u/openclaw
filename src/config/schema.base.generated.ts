@@ -14755,6 +14755,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Configured internal hook entry records used to register concrete runtime handlers and metadata. Keep entries explicit and versioned so production behavior is auditable.",
       tags: ["advanced"],
     },
+    "hooks.internal.entries.a2a-logging.chatId": {
+      label: "A2A Log Chat ID",
+      help: "Telegram chat ID where agent-to-agent log messages are posted. Use the numeric chat ID (e.g. -1001234567890) from the target group or channel.",
+      tags: ["advanced"],
+    },
+    "hooks.internal.entries.a2a-logging.topicId": {
+      label: "A2A Log Topic ID",
+      help: "Telegram topic (forum thread) ID for agent-to-agent log messages. Set this when the target chat is a forum group to keep logs in a dedicated topic.",
+      tags: ["advanced"],
+    },
+    "hooks.internal.entries.a2a-logging.token": {
+      label: "A2A Log Bot Token",
+      help: "Bot token override for the a2a-logging hook. When unset, the hook uses the default Telegram bot token from channels.telegram.botToken. Set this to use a separate bot for logging.",
+      tags: ["security", "auth"],
+    },
     "hooks.internal.load": {
       label: "Internal Hook Loader",
       help: "Internal hook loader settings controlling where handler modules are discovered at startup. Use constrained load roots to reduce accidental module conflicts or shadowing.",

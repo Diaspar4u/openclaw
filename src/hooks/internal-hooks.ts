@@ -13,7 +13,13 @@ import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "agent_to_agent";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -40,6 +46,29 @@ export type GatewayStartupHookEvent = InternalHookEvent & {
   type: "gateway";
   action: "startup";
   context: GatewayStartupHookContext;
+};
+
+// ============================================================================
+// Agent-to-Agent Hook Events
+// ============================================================================
+
+export type AgentToAgentHookContext = {
+  /** Session key of the sending agent */
+  sourceSessionKey: string;
+  /** Agent ID extracted from source session key (e.g. "dev", "finance") */
+  sourceAgentId: string;
+  /** Session key of the target agent */
+  targetSessionKey: string;
+  /** Agent ID extracted from target session key */
+  targetAgentId: string;
+  /** The message content sent */
+  message: string;
+};
+
+export type AgentToAgentHookEvent = InternalHookEvent & {
+  type: "agent_to_agent";
+  action: "send";
+  context: AgentToAgentHookContext;
 };
 
 // ============================================================================
@@ -453,5 +482,22 @@ export function isSessionPatchEvent(event: InternalHookEvent): event is SessionP
     context.cfg !== null &&
     typeof context.sessionEntry === "object" &&
     context.sessionEntry !== null
+  );
+}
+
+export function isAgentToAgentEvent(event: InternalHookEvent): event is AgentToAgentHookEvent {
+  if (!isHookEventTypeAndAction(event, "agent_to_agent", "send")) {
+    return false;
+  }
+  const context = getHookContext<AgentToAgentHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    hasStringContextField(context, "sourceSessionKey") &&
+    hasStringContextField(context, "sourceAgentId") &&
+    hasStringContextField(context, "targetSessionKey") &&
+    hasStringContextField(context, "targetAgentId") &&
+    hasStringContextField(context, "message")
   );
 }
