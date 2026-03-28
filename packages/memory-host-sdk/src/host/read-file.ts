@@ -28,10 +28,7 @@ export async function readMemoryFile(params: {
     const additionalPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths);
     for (const additionalPath of additionalPaths) {
       try {
-        const stat = await fs.lstat(additionalPath);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
+        const stat = await fs.stat(additionalPath);
         if (stat.isDirectory()) {
           if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
             allowedAdditional = true;
@@ -55,6 +52,23 @@ export async function readMemoryFile(params: {
   const statResult = await statRegularFile(absPath);
   if (statResult.missing) {
     return { text: "", path: relPath };
+  }
+  // When the path is a symlink, verify the resolved target is still a .md
+  // file.  This prevents .md-named symlinks from exposing arbitrary
+  // non-Markdown files (e.g. memory/secrets.md -> /etc/passwd).
+  try {
+    const realAbsPath = await fs.realpath(absPath);
+    if (!realAbsPath.endsWith(".md")) {
+      throw new Error("path required");
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message === "path required") {
+      throw err;
+    }
+    if (isFileMissingError(err)) {
+      return { text: "", path: relPath };
+    }
+    throw err;
   }
   let content: string;
   try {
