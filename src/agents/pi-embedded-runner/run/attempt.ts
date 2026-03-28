@@ -1848,6 +1848,47 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      // Run validate_final_reply hook (synchronous — awaited before return).
+      // Only validate when the run produced assistant text and didn't error out.
+      let validationRejected: boolean | undefined;
+      let validationReason: string | undefined;
+      if (
+        hookRunner?.hasHooks("validate_final_reply") &&
+        assistantTexts.length > 0 &&
+        !promptError &&
+        !aborted &&
+        !timedOut
+      ) {
+        try {
+          const validationResult = await hookRunner.runValidateFinalReply(
+            {
+              assistantTexts,
+              userMessage: params.prompt,
+              retryCount: params.validationRetryCount ?? 0,
+              maxRetries: params.validationMaxRetries ?? 3,
+            },
+            {
+              agentId: hookAgentId,
+              sessionKey: params.sessionKey,
+              sessionId: params.sessionId,
+              workspaceDir: params.workspaceDir,
+              messageProvider: params.messageProvider ?? undefined,
+              trigger: params.trigger,
+              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+            },
+          );
+          if (validationResult && !validationResult.pass) {
+            validationRejected = true;
+            validationReason = validationResult.reason;
+            log.info(
+              `validate_final_reply rejected: ${validationResult.reason ?? "no reason given"}`,
+            );
+          }
+        } catch (err) {
+          log.warn(`validate_final_reply hook failed: ${String(err)}`);
+        }
+      }
+
       return {
         aborted,
         timedOut,
@@ -1875,6 +1916,8 @@ export async function runEmbeddedAttempt(
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
         yieldDetected: yieldDetected || undefined,
+        validationRejected,
+        validationReason,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

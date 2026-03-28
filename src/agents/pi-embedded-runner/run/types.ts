@@ -30,6 +30,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /** Current validation retry count (passed through to validate_final_reply hook). */
+  validationRetryCount?: number;
+  /** Max validation retries (passed through to validate_final_reply hook). */
+  validationMaxRetries?: number;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -66,4 +70,8 @@ export type EmbeddedRunAttemptResult = {
   clientToolCall?: { name: string; params: Record<string, unknown> };
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** True when a validate_final_reply hook rejected the response. */
+  validationRejected?: boolean;
+  /** Rejection reason from the validate_final_reply hook. */
+  validationReason?: string;
 };
