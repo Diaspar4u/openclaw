@@ -10,6 +10,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
+  SCHEDULED_RESTART_MAX_WAIT_MS,
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
@@ -211,7 +212,10 @@ export function createGatewayReloadHandlers(params: {
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
+        // Config deferralTimeoutMs=0 means "timeout after one poll" (clamped to pollMs),
+        // NOT "wait forever". Only INDEFINITE_DRAIN_MAX_WAIT_MS (via gateway tool) triggers
+        // infinite drain. Use || so config 0 falls back to the bounded default.
+        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs || SCHEDULED_RESTART_MAX_WAIT_MS,
         hooks: {
           onReady: () => {
             restartPending = false;
