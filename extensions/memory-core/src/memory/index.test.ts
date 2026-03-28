@@ -1311,7 +1311,7 @@ describe("memory index", () => {
     await expect(manager.readFile({ relPath: "NOTES.md" })).rejects.toThrow("path required");
   });
 
-  it("allows reading from additional memory paths and blocks symlinks", async () => {
+  it("allows reading from additional memory paths and follows symlinks", async () => {
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "extra.md"), "Extra content.");
 
@@ -1335,9 +1335,10 @@ describe("memory index", () => {
       }
     }
     if (symlinkOk) {
-      await expect(manager.readFile({ relPath: "extra/linked.md" })).rejects.toThrow(
-        "path required",
-      );
+      await expect(manager.readFile({ relPath: "extra/linked.md" })).resolves.toEqual({
+        path: "extra/linked.md",
+        text: "Extra content.",
+      });
     }
   });
 });
