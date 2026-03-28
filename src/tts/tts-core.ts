@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { Readable, Transform } from "node:stream";
 import { completeSimple, type TextContent } from "@mariozechner/pi-ai";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -206,4 +207,206 @@ export function scheduleCleanup(
     }
   }, delayMs);
   timer.unref();
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI TTS streaming helpers
+// The functions below (normalizeOpenAITtsBaseUrl, getOpenAITtsBaseUrl, etc.)
+// were extracted from this file into extensions/openai/tts.ts when TTS
+// providers were pluginized. They are duplicated here to keep openaiTTSStream
+// self-contained within core — core cannot import from extensions.
+// ---------------------------------------------------------------------------
+
+const OPENAI_TTS_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+const OPENAI_TTS_MODELS_LIST = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
+
+const OPENAI_TTS_VOICES_LIST = [
+  "alloy",
+  "ash",
+  "ballad",
+  "cedar",
+  "coral",
+  "echo",
+  "fable",
+  "juniper",
+  "marin",
+  "onyx",
+  "nova",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+
+function normalizeOpenAITtsBaseUrl(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return OPENAI_TTS_DEFAULT_BASE_URL;
+  }
+  return trimmed.replace(/\/+$/, "");
+}
+
+function isCustomOpenAIEndpoint(baseUrl?: string): boolean {
+  if (baseUrl != null) {
+    return normalizeOpenAITtsBaseUrl(baseUrl) !== OPENAI_TTS_DEFAULT_BASE_URL;
+  }
+  return normalizeOpenAITtsBaseUrl(process.env.OPENAI_TTS_BASE_URL) !== OPENAI_TTS_DEFAULT_BASE_URL;
+}
+
+function getOpenAITtsBaseUrl(): string {
+  return normalizeOpenAITtsBaseUrl(
+    process.env.OPENAI_TTS_BASE_URL?.trim() || OPENAI_TTS_DEFAULT_BASE_URL,
+  );
+}
+
+function isValidOpenAITtsStreamModel(model: string, baseUrl?: string): boolean {
+  if (isCustomOpenAIEndpoint(baseUrl)) {
+    return true;
+  }
+  return OPENAI_TTS_MODELS_LIST.includes(model as (typeof OPENAI_TTS_MODELS_LIST)[number]);
+}
+
+function isValidOpenAITtsStreamVoice(voice: string, baseUrl?: string): boolean {
+  if (isCustomOpenAIEndpoint(baseUrl)) {
+    return true;
+  }
+  return OPENAI_TTS_VOICES_LIST.includes(voice as (typeof OPENAI_TTS_VOICES_LIST)[number]);
+}
+
+function resolveOpenAITtsStreamInstructions(
+  model: string,
+  instructions?: string,
+): string | undefined {
+  const next = instructions?.trim();
+  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
+}
+
+export type OpenaiTTSStreamResult = {
+  stream: Readable;
+  cleanup: () => void;
+};
+
+/**
+ * Streaming variant of openaiTTS. Returns a Node.js Readable stream of raw PCM/mp3/opus
+ * bytes instead of buffering the entire response into a Buffer.
+ *
+ * Unlike openaiTTS (which requires baseUrl), baseUrl is optional here and
+ * falls back to the OPENAI_TTS_BASE_URL env var then the OpenAI default.
+ * This lets callers like textToSpeechTelephonyStream pass the resolved config
+ * value while tests and direct consumers can rely on the env-var fallback.
+ */
+export async function openaiTTSStream(params: {
+  text: string;
+  apiKey: string;
+  baseUrl?: string;
+  model: string;
+  voice: string;
+  speed?: number;
+  instructions?: string;
+  responseFormat: "mp3" | "opus" | "pcm";
+  timeoutMs: number;
+}): Promise<OpenaiTTSStreamResult> {
+  const { text, apiKey, model, voice, speed, responseFormat, timeoutMs } = params;
+  const effectiveBaseUrl = params.baseUrl?.trim()
+    ? normalizeOpenAITtsBaseUrl(params.baseUrl)
+    : getOpenAITtsBaseUrl();
+  const effectiveInstructions = resolveOpenAITtsStreamInstructions(model, params.instructions);
+
+  if (!isValidOpenAITtsStreamModel(model, effectiveBaseUrl)) {
+    throw new Error(`Invalid model: ${model}`);
+  }
+  if (!isValidOpenAITtsStreamVoice(voice, effectiveBaseUrl)) {
+    throw new Error(`Invalid voice: ${voice}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+    cleaned = true;
+    clearTimeout(timeout);
+    if (stallTimer !== undefined) {
+      clearTimeout(stallTimer);
+    }
+    controller.abort();
+  };
+
+  const response = await fetch(`${effectiveBaseUrl}/audio/speech`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: text,
+      voice,
+      response_format: responseFormat,
+      ...(speed != null && { speed }),
+      ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
+    }),
+    signal: controller.signal,
+  }).catch((err) => {
+    cleanup();
+    throw err;
+  });
+
+  if (!response.ok) {
+    cleanup();
+    throw new Error(`OpenAI TTS API error (${response.status})`);
+  }
+
+  if (!response.body) {
+    cleanup();
+    throw new Error("OpenAI TTS API returned no body");
+  }
+
+  // Clear the connection timeout now that headers have arrived.
+  // Install a read-deadline watchdog: if no data arrives, abort to prevent
+  // a stalled stream from hanging the TTS pipeline indefinitely.
+  // Use the configured timeout (capped at 30s) so operators with shorter
+  // timeouts get faster failure on mid-stream stalls.
+  clearTimeout(timeout);
+  const STALL_DEADLINE_MS = Math.min(timeoutMs, 30_000);
+  stallTimer = setTimeout(
+    () => controller.abort(new Error("TTS stream stall timeout")),
+    STALL_DEADLINE_MS,
+  ).unref();
+
+  // Double cast required: fetch Response.body is a web ReadableStream but
+  // Readable.fromWeb expects the Node.js stream/web type. Standard pattern
+  // used across the codebase (batch-voyage.ts, acp/server.ts, etc.).
+  const stream = Readable.fromWeb(
+    response.body as unknown as import("node:stream/web").ReadableStream,
+  );
+
+  // Wrap in a Transform with zero readable highWaterMark so backpressure
+  // gates transform() calls to downstream consumption speed. This ensures
+  // the stall watchdog resets on *consumption*, not on arrival — without it,
+  // fast OpenAI delivery would buffer all chunks (resetting the timer on
+  // each), then the timer starts its final countdown while the caller still
+  // drains at ~real-time (20 ms/frame).
+  const watchdogTransform = new Transform({
+    readableHighWaterMark: 0,
+    transform(chunk, _encoding, callback) {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(
+        () => controller.abort(new Error("TTS stream stall timeout")),
+        STALL_DEADLINE_MS,
+      ).unref();
+      callback(null, chunk);
+    },
+  });
+  stream.pipe(watchdogTransform);
+  stream.on("error", (err) => watchdogTransform.destroy(err));
+  watchdogTransform.on("end", cleanup);
+  watchdogTransform.on("error", cleanup);
+  watchdogTransform.on("close", cleanup);
+
+  return { stream: watchdogTransform, cleanup };
 }
