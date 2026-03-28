@@ -22,6 +22,7 @@ import {
   summarizeInStages,
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
+import { sanitizeForPromptLiteral } from "../sanitize-for-prompt.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -59,6 +60,10 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const MAX_EMERGENCY_ERROR_MESSAGE_CHARS = 200;
+const MAX_EMERGENCY_PRIOR_SUMMARY_CHARS = 4000;
+const MAX_EMERGENCY_EXTRACT_CHARS = 3000;
+const MAX_EMERGENCY_EXTRACT_ENTRY_CHARS = 400;
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
@@ -311,6 +316,44 @@ function extractMessageText(message: AgentMessage): string {
     }
   }
   return parts.join("\n").trim();
+}
+
+/**
+ * Best-effort text extraction from messages for emergency fallback.
+ * When LLM summarization fails before producing any partial summary,
+ * this prevents permanent loss of the unsummarized message slice by
+ * extracting user/assistant text snippets. Intentionally truncated
+ * to stay within a reasonable budget.
+ */
+function extractEmergencyMessageDigest(messages: AgentMessage[]): string {
+  const lines: string[] = [];
+  let totalChars = 0;
+  for (const message of messages) {
+    if (totalChars >= MAX_EMERGENCY_EXTRACT_CHARS) {
+      lines.push(`...and ${messages.length - lines.length} more message(s) not captured.`);
+      break;
+    }
+    const role = (message as { role?: unknown }).role;
+    if (role !== "user" && role !== "assistant") {
+      continue;
+    }
+    const text = extractMessageText(message);
+    if (!text) {
+      continue;
+    }
+    const label = role === "user" ? "User" : "Assistant";
+    const snippet =
+      text.length > MAX_EMERGENCY_EXTRACT_ENTRY_CHARS
+        ? text.slice(0, MAX_EMERGENCY_EXTRACT_ENTRY_CHARS) + "..."
+        : text;
+    const line = `- ${label}: ${snippet}`;
+    lines.push(line);
+    totalChars += line.length;
+  }
+  if (lines.length === 0) {
+    return "";
+  }
+  return `\n\nUnsummarized message digest (best-effort text extraction):\n${lines.join("\n")}`;
 }
 
 function formatNonTextPlaceholder(content: unknown): string | null {
@@ -599,6 +642,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
+    let preservedTurnsSection = "";
+    let droppedSummary: string | undefined;
+    let partialHistorySummary: string | undefined;
 
     // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
     // Fall back to runtime.model which is explicitly passed when building extension paths.
@@ -692,8 +738,6 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           ? preparation.tokensBefore
           : undefined;
 
-      let droppedSummary: string | undefined;
-
       if (tokensBefore !== undefined) {
         const summarizableTokens =
           estimateMessagesTokens(messagesToSummarize) + estimateMessagesTokens(turnPrefixMessages);
@@ -744,6 +788,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
+                // Re-throw abort errors so signal cancellation propagates correctly.
+                if (
+                  signal?.aborted ||
+                  (droppedError instanceof Error && droppedError.name === "AbortError")
+                ) {
+                  throw droppedError;
+                }
                 log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
@@ -763,7 +814,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         recentTurnsPreserve,
       });
       messagesToSummarize = summaryTargetMessages;
-      const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
       const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
       const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
         .slice(-10)
@@ -818,6 +869,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
           summaryWithoutPreservedTurns = historySummary;
+          partialHistorySummary = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
             const prefixSummary = await compactionSafeguardDeps.summarizeInStages({
               messages: turnPrefixMessages,
@@ -927,15 +979,88 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // Re-throw abort errors so signal cancellation doesn't trigger emergency fallback.
+      // Check signal state first (covers all abort reasons including TimeoutError),
+      // then fall back to name check for cases where signal is unavailable.
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+        throw error;
+      }
+      const rawErrorMessage = error instanceof Error ? error.message : String(error);
       log.warn(
-        `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
+        `Compaction summarization failed; using emergency fallback to avoid stuck session: ${rawErrorMessage}`,
       );
-      setCompactionSafeguardCancelReason(
-        ctx.sessionManager,
-        `Compaction safeguard could not summarize the session: ${message}`,
-      );
-      return { cancel: true };
+      // Sanitize error message before embedding in LLM context to prevent prompt injection / secret leakage.
+      const sanitizedErrorMessage = sanitizeForPromptLiteral(rawErrorMessage);
+      const errorMessage =
+        sanitizedErrorMessage.length > MAX_EMERGENCY_ERROR_MESSAGE_CHARS
+          ? sanitizedErrorMessage.slice(0, MAX_EMERGENCY_ERROR_MESSAGE_CHARS) + "..."
+          : sanitizedErrorMessage;
+      // Emergency fallback: return a static summary instead of cancelling.
+      // Cancelling leaves the session at its current (oversized) context,
+      // causing a compaction-fail-retry loop on every subsequent message.
+      const effectivePrior = droppedSummary ?? preparation.previousSummary;
+      // Truncate carried-forward summary to prevent unbounded nesting across repeated failures.
+      const clampedPrior =
+        effectivePrior && effectivePrior.length > MAX_EMERGENCY_PRIOR_SUMMARY_CHARS
+          ? effectivePrior.slice(0, MAX_EMERGENCY_PRIOR_SUMMARY_CHARS) + "\n[…truncated]"
+          : effectivePrior;
+      // Sanitize prior summary before embedding in LLM context — it originates from
+      // LLM output (droppedSummary) or external input (previousSummary), same as rawErrorMessage above.
+      const sanitizedPrior = clampedPrior ? sanitizeForPromptLiteral(clampedPrior) : clampedPrior;
+      const priorContext = sanitizedPrior
+        ? `\n\nPrior summary (carried forward):\n${sanitizedPrior}`
+        : "";
+      const splitTurnNote =
+        preparation.isSplitTurn && preparation.turnPrefixMessages?.length
+          ? `\n\n**Split-turn context lost:** ${preparation.turnPrefixMessages.length} turn-prefix message(s) could not be summarized due to the failure above.`
+          : "";
+      // Best-effort: include workspace critical rules (AGENTS.md Session Startup / Red Lines).
+      let workspaceCtx = "";
+      try {
+        workspaceCtx = await readWorkspaceContextForSummary();
+      } catch (wsError) {
+        // best-effort; don't let workspace read failure block the emergency return
+        log.warn(
+          `Emergency fallback: failed to read workspace context: ${
+            wsError instanceof Error ? wsError.message : String(wsError)
+          }`,
+        );
+      }
+      // Intentionally lossy: when LLM summarization fails, we preserve whatever
+      // structured context we can extract (prior summary, recent turns, tool
+      // failures, file ops) rather than cancelling and leaving the session stuck
+      // in a compact-fail-compact loop. Some detail loss is the accepted tradeoff.
+      const recoveredSummarySection = partialHistorySummary
+        ? `\n\nRecovered history summary:\n${sanitizeForPromptLiteral(partialHistorySummary)}`
+        : "";
+      // When no partial summary was recovered, extract a best-effort text digest
+      // from the messages that would otherwise be permanently lost after
+      // firstKeptEntryId marks them as "already summarized."
+      const messageDigestSection = !partialHistorySummary
+        ? extractEmergencyMessageDigest(preparation.messagesToSummarize)
+        : "";
+      const unsummarizedNote = partialHistorySummary
+        ? `A partial history summary was recovered before the failure.`
+        : `History was cut at the SDK-computed boundary; content before that point is not summarized.`;
+      const emergencySummary =
+        `Emergency compaction: summarization failed (${errorMessage}). ` +
+        unsummarizedNote +
+        priorContext +
+        recoveredSummarySection +
+        messageDigestSection +
+        splitTurnNote +
+        preservedTurnsSection +
+        toolFailureSection +
+        fileOpsSummary +
+        workspaceCtx;
+      return {
+        compaction: {
+          summary: emergencySummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
   });
 }
@@ -958,6 +1083,7 @@ export const __testing = {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  extractEmergencyMessageDigest,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,

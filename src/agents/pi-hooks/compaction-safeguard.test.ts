@@ -42,6 +42,7 @@ const {
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
   formatFileOperations,
+  extractEmergencyMessageDigest,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -1918,6 +1919,547 @@ describe("compaction-safeguard double-compaction guard", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("compaction-safeguard emergency fallback", () => {
+  it("includes split-turn note when isSplitTurn and turnPrefixMessages present", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const spy = vi
+      .spyOn(compactionModule, "summarizeInStages")
+      .mockRejectedValue(new Error("split turn failure"));
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix msg 1", timestamp: Date.now() - 9000 },
+          { role: "assistant", content: "prefix reply 1", timestamp: Date.now() - 8500 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-split",
+        tokensBefore: 999_999,
+        isSplitTurn: true,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary: string };
+      };
+
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("Split-turn context lost");
+      expect(result.compaction!.summary).toContain("2 turn-prefix message(s)");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("returns emergency compaction instead of cancelling when summarization throws", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    // Mock summarizeInStages to throw deterministically so the test
+    // exercises the catch path regardless of token estimation internals.
+    const spy = vi
+      .spyOn(compactionModule, "summarizeInStages")
+      .mockRejectedValue(new Error("injected summarization failure"));
+
+    const compactionHandler = createCompactionHandler();
+
+    // Provide enough messages (>3 turns) so splitPreservedRecentTurns
+    // still leaves some for summarization (default preserves 3 recent turns).
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-emergency",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: ["a.ts"], edited: ["b.ts"], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: "Prior conversation context about the project.",
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: {
+          summary: string;
+          firstKeptEntryId: string;
+          tokensBefore: number;
+          details: { readFiles: string[]; modifiedFiles: string[] };
+        };
+      };
+
+      // Must NOT cancel — that creates the stuck-session loop.
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("Emergency compaction");
+      expect(result.compaction!.summary).toContain("injected summarization failure");
+      // Prior summary must be preserved in emergency fallback
+      expect(result.compaction!.summary).toContain("Prior conversation context about the project.");
+      expect(result.compaction!.firstKeptEntryId).toBe("entry-emergency");
+      expect(result.compaction!.tokensBefore).toBe(999_999);
+      expect(result.compaction!.details.readFiles).toEqual(["a.ts"]);
+      expect(result.compaction!.details.modifiedFiles).toEqual(["b.ts"]);
+      // When no partial summary was recovered, the emergency fallback must
+      // include a best-effort text digest of the unsummarized messages to
+      // prevent permanent conversation loss (see Codex review #45).
+      expect(result.compaction!.summary).toContain("Unsummarized message digest");
+      expect(result.compaction!.summary).toContain("old message 1");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-throws AbortError instead of triggering emergency fallback", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const abortError = new DOMException("The operation was aborted", "AbortError");
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockRejectedValue(abortError);
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-abort",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      await expect(compactionHandler(mockEvent, mockContext)).rejects.toThrow(abortError);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("re-throws non-AbortError when signal is aborted (e.g. TimeoutError)", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const timeoutError = new Error("request timed out");
+    timeoutError.name = "TimeoutError";
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockRejectedValue(timeoutError);
+
+    const compactionHandler = createCompactionHandler();
+
+    const abortController = new AbortController();
+    abortController.abort(timeoutError);
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-timeout-abort",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: abortController.signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      await expect(compactionHandler(mockEvent, mockContext)).rejects.toThrow("request timed out");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("truncates long prior summary to prevent unbounded nesting", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const spy = vi
+      .spyOn(compactionModule, "summarizeInStages")
+      .mockRejectedValue(new Error("nesting failure"));
+
+    const compactionHandler = createCompactionHandler();
+
+    const longPrior = "x".repeat(10_000);
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-nesting",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: longPrior,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        compaction?: { summary: string };
+      };
+
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("[…truncated]");
+      // The full 10k prior should NOT appear verbatim
+      expect(result.compaction!.summary).not.toContain(longPrior);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("recovers partial history summary when split-turn prefix summarization fails", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    let callCount = 0;
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return "recovered main history summary content";
+      }
+      throw new Error("prefix summarization failed");
+    });
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix msg 1", timestamp: Date.now() - 9000 },
+          { role: "assistant", content: "prefix reply 1", timestamp: Date.now() - 8500 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-partial",
+        tokensBefore: 999_999,
+        isSplitTurn: true,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary: string };
+      };
+
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary).toContain("Emergency compaction");
+      expect(result.compaction!.summary).toContain("Recovered history summary");
+      expect(result.compaction!.summary).toContain("recovered main history summary content");
+      expect(result.compaction!.summary).toContain("partial history summary was recovered");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("truncates long error messages to prevent unbounded summary growth", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const longError = "E".repeat(500);
+    const spy = vi
+      .spyOn(compactionModule, "summarizeInStages")
+      .mockRejectedValue(new Error(longError));
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-truncate-error",
+        tokensBefore: 999_999,
+        isSplitTurn: false,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        compaction?: { summary: string };
+      };
+
+      expect(result.compaction).toBeDefined();
+      // The full 500-char error should NOT appear verbatim
+      expect(result.compaction!.summary).not.toContain(longError);
+      // Should be truncated with "..." suffix
+      expect(result.compaction!.summary).toContain("...");
+      expect(result.compaction!.summary).toContain("Emergency compaction");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("omits message digest when partial history summary was recovered", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    let callCount = 0;
+    const spy = vi.spyOn(compactionModule, "summarizeInStages").mockImplementation(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return "recovered main history summary content";
+      }
+      throw new Error("prefix summarization failed");
+    });
+
+    const compactionHandler = createCompactionHandler();
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "old message 1", timestamp: Date.now() - 8000 },
+          { role: "assistant", content: "old reply 1", timestamp: Date.now() - 7000 },
+          { role: "user", content: "old message 2", timestamp: Date.now() - 6000 },
+          { role: "assistant", content: "old reply 2", timestamp: Date.now() - 5000 },
+          { role: "user", content: "old message 3", timestamp: Date.now() - 4000 },
+          { role: "assistant", content: "old reply 3", timestamp: Date.now() - 3000 },
+          { role: "user", content: "recent message", timestamp: Date.now() - 2000 },
+          { role: "assistant", content: "recent reply", timestamp: Date.now() - 1000 },
+          { role: "user", content: "latest message", timestamp: Date.now() },
+        ] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: "prefix msg 1", timestamp: Date.now() - 9000 },
+          { role: "assistant", content: "prefix reply 1", timestamp: Date.now() - 8500 },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-partial",
+        tokensBefore: 999_999,
+        isSplitTurn: true,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 16_384 },
+        previousSummary: undefined,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock: vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }),
+    });
+
+    try {
+      const result = (await compactionHandler(mockEvent, mockContext)) as {
+        cancel?: boolean;
+        compaction?: { summary: string };
+      };
+
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      // When partial summary was recovered, message digest should NOT appear
+      expect(result.compaction!.summary).not.toContain("Unsummarized message digest");
+      // But recovered summary should be present
+      expect(result.compaction!.summary).toContain("Recovered history summary");
+      expect(result.compaction!.summary).toContain("recovered main history summary content");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("extractEmergencyMessageDigest", () => {
+  it("extracts user and assistant text from messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello world", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi there" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+    ];
+    const digest = extractEmergencyMessageDigest(messages);
+    expect(digest).toContain("Unsummarized message digest");
+    expect(digest).toContain("- User: hello world");
+    expect(digest).toContain("- Assistant: hi there");
+  });
+
+  it("skips toolResult messages", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "ask", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "tool output" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+    ];
+    const digest = extractEmergencyMessageDigest(messages);
+    expect(digest).toContain("- User: ask");
+    expect(digest).not.toContain("tool output");
+  });
+
+  it("truncates long message text", () => {
+    const longText = "x".repeat(1000);
+    const messages: AgentMessage[] = [{ role: "user", content: longText, timestamp: 1 }];
+    const digest = extractEmergencyMessageDigest(messages);
+    expect(digest).toContain("...");
+    expect(digest).not.toContain(longText);
+  });
+
+  it("returns empty string for empty message array", () => {
+    expect(extractEmergencyMessageDigest([])).toBe("");
+  });
+
+  it("returns empty string when no user/assistant messages present", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "tool output" }],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ];
+    expect(extractEmergencyMessageDigest(messages)).toBe("");
   });
 });
 
