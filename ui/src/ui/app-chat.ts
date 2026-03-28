@@ -363,6 +363,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      includeKeys: [host.sessionKey],
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
