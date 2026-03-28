@@ -228,6 +228,7 @@
   "webhook-ingress",
   "webhook-request-guards",
   "webhook-path",
+  "webhook-queue",
   "web-media",
   "voice-call",
   "volcengine",

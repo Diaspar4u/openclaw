@@ -21,6 +21,11 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
+import {
+  dequeueWebhook,
+  enqueueWebhook,
+  replayPendingWebhooks,
+} from "openclaw/plugin-sdk/webhook-queue";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
@@ -250,6 +255,8 @@ export async function startTelegramWebhook(opts: {
   healthPath?: string;
   publicUrl?: string;
   webhookCertPath?: string;
+  /** Override state directory for webhook queue (tests). */
+  stateDir?: string;
 }) {
   const path = opts.path ?? "/telegram-webhook";
   const healthPath = opts.healthPath ?? "/healthz";
@@ -264,12 +271,18 @@ export async function startTelegramWebhook(opts: {
   }
   const runtime = opts.runtime ?? defaultRuntime;
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
+  const queueChannelId = opts.accountId ? `telegram_${opts.accountId}` : "telegram";
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    onUpdateProcessed: (updateId) => {
+      dequeueWebhook(queueChannelId, String(updateId), opts.stateDir).catch((err) => {
+        runtime.log?.(`[webhook-queue] dequeue failed: ${formatErrorMessage(err)}`);
+      });
+    },
   });
   await initializeTelegramWebhookBot({
     bot,
@@ -281,6 +294,7 @@ export async function startTelegramWebhook(opts: {
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
     maxTrackedKeys: WEBHOOK_RATE_LIMIT_DEFAULTS.maxTrackedKeys,
   });
+
   const handler = grammy.webhookCallback(bot, "callback", {
     secretToken: secret,
     onTimeout: "return",
@@ -376,6 +390,28 @@ export async function startTelegramWebhook(opts: {
         respondText(401, "unauthorized");
       };
 
+      // Validate webhook secret before persisting anything to disk.
+      if (secretHeader !== secret) {
+        await unauthorized();
+        return;
+      }
+
+      // Persist payload to disk before processing so it survives a restart.
+      const updateId =
+        body.value && typeof body.value === "object" && "update_id" in body.value
+          ? (body.value as { update_id?: unknown }).update_id
+          : undefined;
+      if (typeof updateId === "number") {
+        try {
+          await enqueueWebhook(queueChannelId, String(updateId), body.value, opts.stateDir);
+        } catch (err) {
+          // Queue write failure must not block normal processing, but should be observable.
+          runtime.log?.(
+            `[webhook-queue] enqueue failed for update ${String(updateId)}: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+
       await handler(body.value, reply, secretHeader, unauthorized);
       if (!replied) {
         respondText(200);
@@ -440,6 +476,34 @@ export async function startTelegramWebhook(opts: {
 
   runtime.log?.(`webhook local listener on http://${host}:${boundPort}${path}`);
   runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
+
+  // Replay any webhook payloads that were enqueued but not fully processed
+  // before the last shutdown. Runs in the background so the HTTP listener and
+  // healthz are already available — a slow/hung replay does not block startup.
+  void (async () => {
+    const pending = await replayPendingWebhooks(queueChannelId, opts.stateDir);
+    if (pending.length === 0) {
+      return;
+    }
+    const results = await Promise.allSettled(
+      pending.map((entry) =>
+        bot.handleUpdate(entry.payload as Parameters<typeof bot.handleUpdate>[0]),
+      ),
+    );
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") {
+        runtime.log?.(
+          `webhook replay failed for update ${pending[i].deduplicationId}: ${formatErrorMessage(result.reason)}`,
+        );
+        // Leave entry on disk — will be retried on next restart (1h TTL cleanup).
+      }
+      // Dequeue for fulfilled entries happens via onUpdateProcessed in the bot middleware.
+    }
+    runtime.log?.(`webhook queue: replayed ${pending.length} pending update(s)`);
+  })().catch((err) => {
+    runtime.log?.(`webhook queue replay error: ${formatErrorMessage(err)}`);
+  });
 
   let shutDown = false;
   const shutdown = () => {

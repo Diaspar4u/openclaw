@@ -66,6 +66,8 @@ export type TelegramBotOptions = {
   /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
   telegramTransport?: TelegramTransport;
   telegramDeps?: TelegramBotDeps;
+  /** Called when a Telegram update has been fully processed (for webhook queue dequeue). */
+  onUpdateProcessed?: (updateId: number) => void;
 };
 
 export { getTelegramSequentialKey };
@@ -329,6 +331,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return skipped;
   };
 
+  // Track deferred processing promises per update_id. Handlers that buffer
+  // messages (media groups, text fragments, inbound debouncing) register a
+  // promise here so `onUpdateProcessed` only fires after the deferred work
+  // completes — not when the middleware `next()` returns.
+  const deferredWork = new Map<number, Promise<void>[]>();
+  const registerDeferredWork = (updateId: number, promise: Promise<void>) => {
+    const existing = deferredWork.get(updateId);
+    if (existing) {
+      existing.push(promise);
+    } else {
+      deferredWork.set(updateId, [promise]);
+    }
+  };
+
   bot.use(async (ctx, next) => {
     const updateId = resolveTelegramUpdateId(ctx);
     if (typeof updateId === "number") {
@@ -336,8 +352,25 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     try {
       await next();
+      if (typeof updateId === "number") {
+        // Wait for any deferred processing (debounce, media group, text
+        // fragment buffering) before signaling the update as processed.
+        const deferred = deferredWork.get(updateId);
+        if (deferred) {
+          deferredWork.delete(updateId);
+          const results = await Promise.allSettled(deferred);
+          if (results.some((r) => r.status === "rejected")) {
+            // Processing failed — do not dequeue so the entry is replayed on restart.
+            return;
+          }
+        }
+        // Only called when all deferred work succeeded: on error the webhook
+        // queue retains the entry so it can be replayed on the next restart.
+        opts.onUpdateProcessed?.(updateId);
+      }
     } finally {
       if (typeof updateId === "number") {
+        deferredWork.delete(updateId);
         pendingUpdateIds.delete(updateId);
         if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = updateId;
@@ -596,6 +629,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     processMessage,
     logger,
     telegramDeps,
+    registerDeferredWork,
   });
 
   const originalStop = bot.stop.bind(bot);

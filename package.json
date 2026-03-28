@@ -955,6 +955,10 @@
       "types": "./dist/plugin-sdk/webhook-path.d.ts",
       "default": "./dist/plugin-sdk/webhook-path.js"
     },
+    "./plugin-sdk/webhook-queue": {
+      "types": "./dist/plugin-sdk/webhook-queue.d.ts",
+      "default": "./dist/plugin-sdk/webhook-queue.js"
+    },
     "./plugin-sdk/web-media": {
       "types": "./dist/plugin-sdk/web-media.d.ts",
       "default": "./dist/plugin-sdk/web-media.js"

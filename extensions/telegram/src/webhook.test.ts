@@ -11,11 +11,13 @@ const deleteWebhookSpy = vi.hoisted(() => vi.fn(async () => true));
 const initSpy = vi.hoisted(() => vi.fn(async () => undefined));
 const stopSpy = vi.hoisted(() => vi.fn());
 const webhookCallbackSpy = vi.hoisted(() => vi.fn(() => handlerSpy));
+const handleUpdateSpy = vi.hoisted(() => vi.fn(async () => undefined));
 const createTelegramBotSpy = vi.hoisted(() =>
   vi.fn(() => ({
     init: initSpy,
     api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
     stop: stopSpy,
+    handleUpdate: handleUpdateSpy,
   })),
 );
 
@@ -117,6 +119,7 @@ function resetTelegramWebhookMocks(): void {
     init: initSpy,
     api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
     stop: stopSpy,
+    handleUpdate: handleUpdateSpy,
   }));
 }
 
@@ -901,6 +904,69 @@ describe("startTelegramWebhook", () => {
         expect(handlerSpy).not.toHaveBeenCalled();
       },
     );
+  });
+
+  it("dequeues webhook file when onUpdateProcessed fires", async () => {
+    // Capture the onUpdateProcessed callback passed to createTelegramBot.
+    let capturedOnUpdateProcessed: ((updateId: number) => void) | undefined;
+    createTelegramBotSpy.mockImplementationOnce((...args: unknown[]) => {
+      const opts = args[0] as Record<string, unknown>;
+      capturedOnUpdateProcessed = opts.onUpdateProcessed as typeof capturedOnUpdateProcessed;
+      return {
+        init: initSpy,
+        api: { setWebhook: setWebhookSpy, deleteWebhook: deleteWebhookSpy },
+        stop: stopSpy,
+        handleUpdate: handleUpdateSpy,
+      };
+    });
+
+    // The webhookCallback handler should invoke the Grammy middleware which
+    // eventually calls onUpdateProcessed. In this mock we control it manually.
+    handlerSpy.mockImplementationOnce((...args: unknown[]) => {
+      const reply = args[1] as (json: string) => Promise<void>;
+      void reply("ok");
+    });
+
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const os = await import("node:os");
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "wh-dequeue-test-"));
+
+    try {
+      await withStartedWebhook(
+        {
+          secret: TELEGRAM_SECRET,
+          path: TELEGRAM_WEBHOOK_PATH,
+          stateDir,
+        },
+        async ({ port }) => {
+          const payload = JSON.stringify({ update_id: 42, message: { text: "test" } });
+          const response = await postWebhookJson({
+            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+            payload,
+            secret: TELEGRAM_SECRET,
+          });
+          expect(response.status).toBe(200);
+
+          // Webhook file should be on disk (enqueued before processing).
+          const queueDir = path.join(stateDir, "webhook-queue");
+          const filesAfterEnqueue = await fs.promises.readdir(queueDir);
+          expect(filesAfterEnqueue.some((f: string) => f.includes("42"))).toBe(true);
+
+          // Simulate middleware completing — fire onUpdateProcessed.
+          expect(capturedOnUpdateProcessed).toBeDefined();
+          capturedOnUpdateProcessed!(42);
+
+          // Wait for async dequeue to complete.
+          await new Promise((r) => setTimeout(r, 50));
+
+          const filesAfterDequeue = await fs.promises.readdir(queueDir);
+          expect(filesAfterDequeue.some((f: string) => f.includes("42"))).toBe(false);
+        },
+      );
+    } finally {
+      await fs.promises.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("de-registers webhook when shutting down", async () => {

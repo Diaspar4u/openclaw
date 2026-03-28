@@ -138,6 +138,10 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
+  /** Register a promise that must settle before the webhook queue dequeues
+   *  the update. Used by deferred handlers (media group, text fragment,
+   *  inbound debounce) to prevent premature dequeue. */
+  registerDeferredWork?: (updateId: number, promise: Promise<void>) => void;
 };
 
 export function buildTelegramNativeCommandCallbackData(commandText: string): string {
