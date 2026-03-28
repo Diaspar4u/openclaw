@@ -23,6 +23,7 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { defaultTelegramBotDeps, type TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -344,6 +345,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         maybePersistSafeWatermark();
       }
     }
+  });
+
+  // Answer callback queries BEFORE sequentialize to avoid Telegram's ~15s timeout.
+  // When an agent turn is running, sequentialize queues updates for the same topic.
+  // By the time the queued callback is processed, the answer window is dead.
+  // Note: this also answers queries for updates that shouldSkipUpdate would later reject,
+  // but answerCallbackQuery is idempotent and Telegram ignores redundant answers.
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      // ctx.answerCallbackQuery is always present when ctx.callbackQuery is truthy in
+      // production grammY contexts — no bot.api fallback needed (the old bot-handlers.ts
+      // guard was defensive against hand-crafted test contexts, not a real runtime path).
+      void withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: () => ctx.answerCallbackQuery(),
+      }).catch(() => {
+        // withTelegramApiErrorLogging has already emitted the failure.
+      });
+    }
+    await next();
   });
 
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));

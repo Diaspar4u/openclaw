@@ -8,7 +8,6 @@ import { expectChannelInboundContextContract as expectInboundContextContract } f
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const {
-  answerCallbackQuerySpy,
   commandSpy,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
@@ -288,7 +287,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
+    // answerCallbackQuery is handled by the pre-sequentialize middleware (tested in bot.create-telegram-bot.test.ts)
   });
 
   it("blocks DM model-selection callbacks for unpaired users when inline buttons are DM-scoped", async () => {
@@ -351,7 +350,7 @@ describe("createTelegramBot", () => {
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
       expect(loadSessionStore(storePath, { skipCache: true })).toEqual({});
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
+      // answerCallbackQuery is handled by the pre-sequentialize middleware (tested in bot.create-telegram-bot.test.ts)
     } finally {
       await rm(storePath, { force: true });
     }
@@ -398,7 +397,6 @@ describe("createTelegramBot", () => {
 
     // The callback should be processed (not silently blocked)
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
   });
 
   it("clears approval buttons without re-editing callback message text", async () => {
@@ -476,7 +474,6 @@ describe("createTelegramBot", () => {
     });
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
   });
 
   it("allows approval callbacks when exec approvals are enabled even without generic inlineButtons capability", async () => {
@@ -521,7 +518,6 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-capability-free");
   });
 
   it("resolves plugin approval callbacks through the shared approval resolver", async () => {
@@ -967,7 +963,6 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-4");
   });
 
   it("routes compact model callbacks by inferring provider", async () => {
@@ -1030,7 +1025,6 @@ describe("createTelegramBot", () => {
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
     } finally {
       await rm(storePath, { force: true });
     }
@@ -1096,7 +1090,6 @@ describe("createTelegramBot", () => {
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
-      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
     } finally {
       await rm(storePath, { force: true });
     }
@@ -1152,7 +1145,6 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
       'Could not resolve model "shared-model".',
     );
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
   it("includes sender identity in group envelope headers", async () => {
