@@ -1071,6 +1071,23 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (statResult.missing) {
       return { text: "", path: relPath };
     }
+    // When the path is a symlink, verify the resolved target is still a .md
+    // file.  This prevents .md-named symlinks from exposing arbitrary
+    // non-Markdown files (e.g. memory/secrets.md -> /etc/passwd).
+    try {
+      const realAbsPath = await fs.realpath(absPath);
+      if (!realAbsPath.endsWith(".md")) {
+        throw new Error("path required");
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message === "path required") {
+        throw err;
+      }
+      if (isFileMissingError(err)) {
+        return { text: "", path: relPath };
+      }
+      throw err;
+    }
     if (params.from !== undefined || params.lines !== undefined) {
       const partial = await this.readPartialText(absPath, params.from, params.lines);
       if (partial.missing) {

@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../../../../src/infra/errors.js";
 import { detectMime } from "../../../../src/media/mime.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 import { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
@@ -92,15 +93,68 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(dir: string, files: string[], multimodal?: MemoryMultimodalSettings) {
+async function walkDir(
+  dir: string,
+  files: string[],
+  multimodal?: MemoryMultimodalSettings,
+  visited?: Set<string>,
+) {
+  const seen = visited ?? new Set<string>();
+  let realDir: string;
+  try {
+    realDir = await fs.realpath(dir);
+  } catch (err) {
+    // Broken symlink (ENOENT), circular symlink (ELOOP), permission denied (EACCES/EPERM),
+    // or path component not a directory (ENOTDIR) — skip silently.
+    if (
+      isFileMissingError(err) ||
+      hasErrnoCode(err, "ELOOP") ||
+      hasErrnoCode(err, "ENOTDIR") ||
+      hasErrnoCode(err, "EACCES") ||
+      hasErrnoCode(err, "EPERM")
+    ) {
+      return;
+    }
+    throw err;
+  }
+  if (seen.has(realDir)) {
+    return; // Cycle detected — prevent infinite recursion
+  }
+  seen.add(realDir);
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) {
+      try {
+        const targetStat = await fs.stat(full);
+        if (targetStat.isDirectory()) {
+          await walkDir(full, files, multimodal, seen);
+        } else if (targetStat.isFile() && isAllowedMemoryFilePath(full, multimodal)) {
+          // Verify the resolved target also passes the extension filter to prevent
+          // .md-named symlinks from exposing arbitrary files (e.g. secret.md -> /etc/passwd).
+          const realTarget = await fs.realpath(full);
+          if (isAllowedMemoryFilePath(realTarget, multimodal)) {
+            files.push(full);
+          }
+        }
+      } catch (err) {
+        // Skip broken symlinks (ENOENT), circular symlinks (ELOOP),
+        // path-component conflicts (ENOTDIR), and permission errors (EPERM/EACCES).
+        // Re-throw unexpected errors (e.g. ENOSPC, readdir failures from recursive walkDir).
+        if (
+          !isFileMissingError(err) &&
+          !hasErrnoCode(err, "ELOOP") &&
+          !hasErrnoCode(err, "ENOTDIR") &&
+          !hasErrnoCode(err, "EPERM") &&
+          !hasErrnoCode(err, "EACCES")
+        ) {
+          throw err;
+        }
+      }
       continue;
     }
     if (entry.isDirectory()) {
-      await walkDir(full, files, multimodal);
+      await walkDir(full, files, multimodal, seen);
       continue;
     }
     if (!entry.isFile()) {
@@ -125,8 +179,8 @@ export async function listMemoryFiles(
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
+      const stat = await fs.stat(absPath);
+      if (!stat.isFile()) {
         return;
       }
       if (!absPath.endsWith(".md")) {
@@ -139,8 +193,8 @@ export async function listMemoryFiles(
   await addMarkdownFile(memoryFile);
   await addMarkdownFile(altMemoryFile);
   try {
-    const dirStat = await fs.lstat(memoryDir);
-    if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
+    const dirStat = await fs.stat(memoryDir);
+    if (dirStat.isDirectory()) {
       await walkDir(memoryDir, result);
     }
   } catch {}
@@ -149,10 +203,7 @@ export async function listMemoryFiles(
   if (normalizedExtraPaths.length > 0) {
     for (const inputPath of normalizedExtraPaths) {
       try {
-        const stat = await fs.lstat(inputPath);
-        if (stat.isSymbolicLink()) {
-          continue;
-        }
+        const stat = await fs.stat(inputPath);
         if (stat.isDirectory()) {
           await walkDir(inputPath, result, multimodal);
           continue;
