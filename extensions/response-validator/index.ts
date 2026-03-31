@@ -10,7 +10,7 @@
  *   message_sending   — primary validation gate (async, awaited, can cancel)
  */
 
-import fs from "node:fs";
+import { readFile } from "node:fs/promises";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 
 // ── Regex patterns (ported from stop-validator.sh) ───────────────────
@@ -37,6 +37,12 @@ const RECAP_RE =
   /(?:here'?s|here is) (?:what|everything) (?:we'?ve|I'?ve|was) (?:done|completed|accomplished|changed|updated|fixed)|changes (?:made|applied|completed)|summary of (?:changes|work|what)|for (?:reference|completeness|context):|to (?:recap|summarize|sum up)|as a reminder/i;
 
 // ── State (in-memory, per channel:account) ───────────────────────────
+// Keyed by channelId:accountId — NOT per-conversation. The message_sending hook
+// ctx (PluginHookMessageContext at src/plugins/types.ts:1642-1646) provides
+// channelId and accountId but NOT conversationId, so per-conversation scoping
+// is not possible from this hook. For multi-conversation channels (e.g. Telegram
+// forum topics), the most recent user message / session context / retry counter
+// is shared across conversations under the same channel+account.
 
 type Stamped<T> = T & { ts: number };
 
@@ -109,13 +115,16 @@ function checkRegex(text: string, userMsg: string | undefined): string | null {
 
 // ── Haiku scope/completeness validator ───────────────────────────────
 
-const HAIKU_PROMPT_TEMPLATE = `You are a strict response validator. Check the assistant response against the user request using this checklist.
+// Build the validator prompt via template literal — no .replace() placeholders,
+// so user/assistant content containing marker-like strings cannot corrupt the prompt.
+function buildHaikuPrompt(userMsg: string, assistantMsg: string): string {
+  return `You are a strict response validator. Check the assistant response against the user request using this checklist.
 
 User request:
-{USER}
+${userMsg}
 
 Assistant response:
-{ASSISTANT}
+${assistantMsg}
 
 CHECKLIST — evaluate each independently:
 
@@ -141,6 +150,7 @@ PASS - both checks pass
 FAIL SCOPE: <one sentence explaining what was added that was not requested>
 FAIL COMPLETENESS: <list each specific question/request that was missed>
 FAIL BOTH: <scope issue> AND <completeness issue>`;
+}
 
 type HaikuLogger = { warn?: (m: string) => void; error: (m: string) => void };
 
@@ -160,11 +170,10 @@ async function checkHaiku(params: {
   const timer = setTimeout(() => controller.abort(), 120_000);
 
   try {
-    const prompt = HAIKU_PROMPT_TEMPLATE.replace("{USER}", params.userMsg).replace(
-      "{ASSISTANT}",
-      params.assistantMsg,
-    );
-
+    // Intentionally uses raw fetch to Anthropic API rather than runEmbeddedPiAgent:
+    // the validator requires deterministic model selection (always Haiku, never affected
+    // by config model overrides) and minimal latency. Auth IS resolved via the platform's
+    // resolveApiKeyForProvider — only the model routing is bypassed by design.
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -175,7 +184,9 @@ async function checkHaiku(params: {
       body: JSON.stringify({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 400,
-        messages: [{ role: "user", content: prompt }],
+        messages: [
+          { role: "user", content: buildHaikuPrompt(params.userMsg, params.assistantMsg) },
+        ],
       }),
       signal: controller.signal,
     });
@@ -190,7 +201,7 @@ async function checkHaiku(params: {
       content?: Array<{ text?: string }>;
       error?: { message?: string };
     };
-    const verdict = data.content?.[0]?.text ?? "";
+    const verdict = data.content?.[0]?.text?.trim() ?? "";
 
     if (!verdict) {
       const apiErr = data.error?.message;
@@ -198,17 +209,23 @@ async function checkHaiku(params: {
       return "BLOCKED: Haiku validator returned empty response. Blocking until validator can run.";
     }
 
+    if (verdict.startsWith("PASS")) {
+      return null;
+    }
+
     if (verdict.startsWith("FAIL")) {
       return `BLOCKED by response validator: ${verdict}\n\nDo EXACTLY what was asked — nothing more, nothing less.`;
     }
 
-    return null;
+    // Malformed verdict (not PASS or FAIL) — fail-closed
+    params.logger.error(`response-validator: Haiku malformed verdict: ${verdict.slice(0, 100)}`);
+    return "BLOCKED: Haiku validator returned malformed verdict. Blocking until validator can run.";
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("abort")) {
+    if (controller.signal.aborted) {
       params.logger.error("response-validator: Haiku timed out (120s)");
       return "BLOCKED: Haiku validator timed out. Blocking until validator can run.";
     }
+    const msg = err instanceof Error ? err.message : String(err);
     params.logger.error(`response-validator: Haiku failed: ${msg}`);
     return "BLOCKED: Haiku validator error. Blocking until validator can run.";
   } finally {
@@ -338,14 +355,19 @@ export default definePluginEntry({
             provider: "anthropic",
           });
           apiKey = auth?.apiKey;
-        } catch {
-          // fall through to file lookup
+        } catch (authErr: unknown) {
+          api.logger.warn?.(
+            `response-validator: modelAuth failed (${authErr instanceof Error ? authErr.message : String(authErr)}), trying file fallback`,
+          );
         }
         if (!apiKey) {
           try {
-            apiKey = fs.readFileSync(`${process.env.HOME}/.claude/hooks/api_key`, "utf8").trim();
-          } catch {
-            // handled below
+            // Fallback: Claude Code hook API key file (our setup)
+            apiKey = (await readFile(`${process.env.HOME}/.claude/hooks/api_key`, "utf8")).trim();
+          } catch (fsErr: unknown) {
+            api.logger.warn?.(
+              `response-validator: file fallback failed (${fsErr instanceof Error ? fsErr.message : String(fsErr)})`,
+            );
           }
         }
         if (!apiKey) {
@@ -367,6 +389,11 @@ export default definePluginEntry({
           retryCounts.set(retryKey, { count: count + 1, ts: Date.now() });
           scheduleRetry(api, session, haikuBlock);
           return { cancel: true };
+        }
+
+        // All checks passed — clear any stale retry count for this key
+        if (count > 0) {
+          retryCounts.delete(retryKey);
         }
       },
       { priority: -100 }, // run after other hooks
