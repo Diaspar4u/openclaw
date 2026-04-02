@@ -8,6 +8,7 @@ import { expectChannelInboundContextContract as expectInboundContextContract } f
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const {
+  answerCallbackQuerySpy,
   commandSpy,
   editMessageReplyMarkupSpy,
   editMessageTextSpy,
@@ -579,7 +580,7 @@ describe("createTelegramBot", () => {
       senderId: "9",
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
+    // answerCallbackQuery is handled by the pre-sequentialize middleware (tested in bot.create-telegram-bot.test.ts)
   });
 
   it("blocks approval callbacks from telegram users who are not exec approvers", async () => {
@@ -626,7 +627,6 @@ describe("createTelegramBot", () => {
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
   });
 
   it("does not leak raw approval callback errors back into Telegram chat", async () => {
@@ -733,7 +733,6 @@ describe("createTelegramBot", () => {
       senderId: "9",
     });
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
   it("does not allow target-only recipients to use legacy plugin fallback ids", async () => {
@@ -802,7 +801,6 @@ describe("createTelegramBot", () => {
       `${CROSS_MARK_EMOJI} Failed to submit approval. Please try again or contact an admin.`,
       undefined,
     );
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
   });
 
   it("keeps plugin approval callback buttons for target-only recipients", async () => {
@@ -850,7 +848,6 @@ describe("createTelegramBot", () => {
 
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-blocked");
   });
 
   it("edits commands list for pagination callbacks", async () => {

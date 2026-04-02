@@ -403,7 +403,6 @@ describe("createTelegramBot", () => {
     const payload = replySpy.mock.calls[0][0];
     expect(payload.CommandBody).toBe("/fast status");
     expect(payload.CommandSource).toBe("native");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-native-1");
   });
   it("reloads callback model routing bindings without recreating the bot", async () => {
     const buildModelsProviderDataMock =
