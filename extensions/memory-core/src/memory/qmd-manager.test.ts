@@ -3845,15 +3845,15 @@ describe("QmdMemoryManager", () => {
     ]);
 
     expect(inner.resolveReadPath(results[0]!.path)).toBe(exportedSessionPath);
-    const realLstat = fs.lstat;
-    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+    const realStat = fs.stat;
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
       if (typeof target === "string" && path.resolve(target) === exportedSessionPath) {
         return {
           isFile: () => true,
           isSymbolicLink: () => false,
-        } as Awaited<ReturnType<typeof realLstat>>;
+        } as Awaited<ReturnType<typeof realStat>>;
       }
-      return await realLstat(target, options);
+      return await realStat(target, options as never);
     });
     const realReadFile = fs.readFile;
     const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
@@ -3861,6 +3861,13 @@ describe("QmdMemoryManager", () => {
         return "# Session session-1\n\nsession canary\n";
       }
       return await realReadFile(target, options as never);
+    });
+    const realRealpath = fs.realpath;
+    const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
+      if (typeof target === "string" && path.resolve(target) === exportedSessionPath) {
+        return exportedSessionPath;
+      }
+      return await realRealpath(target);
     });
 
     try {
@@ -3870,8 +3877,9 @@ describe("QmdMemoryManager", () => {
         text: "# Session session-1\n\nsession canary\n",
       });
     } finally {
-      lstatSpy.mockRestore();
+      statSpy.mockRestore();
       readSpy.mockRestore();
+      realpathSpy.mockRestore();
     }
 
     await manager.close();
