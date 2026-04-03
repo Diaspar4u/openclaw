@@ -95,6 +95,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "voicecall.status",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -119,6 +120,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.abort",
     "push.test",
     "node.pending.enqueue",
+    "voicecall.initiate",
+    "voicecall.start",
+    "voicecall.continue",
+    "voicecall.speak",
+    "voicecall.end",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",
