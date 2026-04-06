@@ -297,6 +297,9 @@ export async function runEmbeddedPiAgent(
       const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
+      const MAX_VALIDATION_RETRIES = 3;
+      let validationRetryCount = 0;
+      let validationRetryReason: string | undefined;
       let bootstrapPromptWarningSignaturesSeen =
         params.bootstrapPromptWarningSignaturesSeen ??
         (params.bootstrapPromptWarningSignature ? [params.bootstrapPromptWarningSignature] : []);
@@ -547,7 +550,14 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
-            extraSystemPrompt: params.extraSystemPrompt,
+            extraSystemPrompt: validationRetryReason
+              ? [
+                  params.extraSystemPrompt,
+                  `RESPONSE REJECTED: ${validationRetryReason}\nRegenerate your response addressing this feedback.`,
+                ]
+                  .filter(Boolean)
+                  .join("\n\n")
+              : params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
@@ -556,6 +566,8 @@ export async function runEmbeddedPiAgent(
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            validationRetryCount,
+            validationMaxRetries: MAX_VALIDATION_RETRIES,
           });
 
           const {
@@ -1279,6 +1291,18 @@ export async function runEmbeddedPiAgent(
             }
             logAssistantFailoverDecision("surface_error");
           }
+
+          // Validation retry: if the hook rejected the response, retry up to the cap.
+          if (attempt.validationRejected && validationRetryCount < MAX_VALIDATION_RETRIES) {
+            validationRetryCount++;
+            validationRetryReason = attempt.validationReason;
+            log.info(
+              `validate_final_reply retry ${validationRetryCount}/${MAX_VALIDATION_RETRIES}: ${attempt.validationReason ?? "rejected"}`,
+            );
+            continue;
+          }
+          // Clear retry state on success so it doesn't leak into result metadata.
+          validationRetryReason = undefined;
 
           const usageMeta = buildUsageAgentMetaFields({
             usageAccumulator,

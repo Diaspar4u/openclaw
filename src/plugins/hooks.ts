@@ -27,6 +27,8 @@ import type {
   PluginHookInboundClaimResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
+  PluginHookValidateFinalReplyEvent,
+  PluginHookValidateFinalReplyResult,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -73,6 +75,8 @@ export type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookAgentEndEvent,
+  PluginHookValidateFinalReplyEvent,
+  PluginHookValidateFinalReplyResult,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
   PluginHookInboundClaimContext,
@@ -535,6 +539,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    */
   async function runLlmOutput(event: PluginHookLlmOutputEvent, ctx: PluginHookAgentContext) {
     return runVoidHook("llm_output", event, ctx);
+  }
+
+  /**
+   * Run validate_final_reply hook.
+   * Allows plugins to validate the final assistant response before delivery.
+   * Runs sequentially; first rejection wins.
+   */
+  async function runValidateFinalReply(
+    event: PluginHookValidateFinalReplyEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookValidateFinalReplyResult | undefined> {
+    return runModifyingHook<"validate_final_reply", PluginHookValidateFinalReplyResult>(
+      "validate_final_reply",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.pass === false) {
+            return acc;
+          }
+          return next;
+        },
+      },
+    );
   }
 
   /**
@@ -1003,6 +1031,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runBeforeAgentStart,
     runLlmInput,
     runLlmOutput,
+    runValidateFinalReply,
     runAgentEnd,
     runBeforeCompaction,
     runAfterCompaction,
