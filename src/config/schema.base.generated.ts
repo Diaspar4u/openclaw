@@ -19263,6 +19263,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Automatic session-store maintenance controls for pruning age, entry caps, and file rotation behavior. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
           },
+          suppressBareResetGreeting: {
+            type: "boolean",
+          },
         },
         additionalProperties: false,
         title: "Session",

@@ -151,6 +151,7 @@ export const SessionSchema = z
         }
       })
       .optional(),
+    suppressBareResetGreeting: z.boolean().optional(),
   })
   .strict()
   .optional();
